@@ -1,0 +1,22 @@
+{
+  "name": "smartcontract-exoduze",
+  "private": true,
+  "scripts": {
+    "build": "anchor build",
+    "check": "cargo check --manifest-path ./Cargo.toml -p exoduze_prediction_market",
+    "fmt": "cargo fmt --manifest-path ./Cargo.toml --all",
+    "sync:idl": "node ./scripts/sync-idl.mjs",
+    "test": "anchor test",
+    "test:rust": "cargo test --manifest-path ./Cargo.toml -p exoduze_prediction_market --lib"
+  },
+  "devDependencies": {
+    "@coral-xyz/anchor": "^0.32.1",
+    "@types/chai": "^5.2.1",
+    "@types/mocha": "^10.0.10",
+    "chai": "^5.2.0",
+    "mocha": "^11.2.2",
+    "ts-mocha": "^11.1.0",
+    "typescript": "^5.8.3"
+  }
+}
+

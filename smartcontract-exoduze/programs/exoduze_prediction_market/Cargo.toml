@@ -1,0 +1,27 @@
+[package]
+name = "exoduze_prediction_market"
+version = "0.1.0"
+description = "Exoduze AI-agent prediction market program"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "exoduze_prediction_market"
+
+[features]
+default = []
+cpi = ["no-entrypoint"]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
+
+[dependencies]
+anchor-lang = { version = "0.32.1", features = ["init-if-needed"] }
+anchor-spl = { version = "0.32.1", features = ["token"] }
+
+[lints.rust]
+unexpected_cfgs = { level = "allow", check-cfg = [
+  'cfg(feature, values("anchor-debug", "custom-heap", "custom-panic"))',
+  'cfg(target_os, values("solana"))',
+] }
