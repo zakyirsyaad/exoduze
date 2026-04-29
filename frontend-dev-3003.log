@@ -1,0 +1,12 @@
+
+> exoduz@0.0.1 dev
+> next dev --turbopack --port 3003
+
+▲ Next.js 16.1.7 (Turbopack)
+- Local:         http://localhost:3003
+- Network:       http://192.168.1.2:3003
+- Environments: .env.local
+
+✓ Starting...
+  Suggestion: If you intended to restart next dev, terminate the other process, and then try again.
+[?25h

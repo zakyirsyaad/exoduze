@@ -1,0 +1,40 @@
+{
+  "name": "exoduze-backend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc -p tsconfig.json && node scripts/copy-build-assets.mjs",
+    "start": "node dist/server.js",
+    "check": "tsc --noEmit",
+    "test": "node --import tsx --test src/modules/**/*.test.ts",
+    "db:migrate": "tsx src/db/migrate.ts",
+    "db:seed": "tsx src/db/seed.ts",
+    "db:cleanup-mock": "tsx src/db/cleanup-mock-data.ts",
+    "db:cleanup-auto-published": "tsx src/db/cleanup-auto-published-markets.ts"
+  },
+  "dependencies": {
+    "@coral-xyz/anchor": "^0.32.1",
+    "@fastify/cors": "^10.0.2",
+    "@fastify/multipart": "^10.0.0",
+    "@fastify/websocket": "^11.2.0",
+    "@noble/curves": "^2.2.0",
+    "@scure/base": "^2.2.0",
+    "@solana/spl-token": "^0.4.14",
+    "@solana/web3.js": "^1.98.4",
+    "@supabase/supabase-js": "^2.104.0",
+    "bn.js": "^5.2.3",
+    "dotenv": "^16.4.5",
+    "fastify": "^5.1.0",
+    "pg": "^8.13.3",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/bn.js": "^5.2.0",
+    "@types/node": "^22.10.5",
+    "@types/pg": "^8.11.10",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

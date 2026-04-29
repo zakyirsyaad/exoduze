@@ -1,0 +1,93 @@
+.solana-wallet-button,
+.solana-wallet-button .wallet-adapter-dropdown {
+    display: inline-flex;
+}
+
+.solana-wallet-button .wallet-adapter-button {
+    align-items: center;
+    background-color: #ffffff;
+    border-radius: 0.5rem;
+    color: #000000;
+    font-family: inherit;
+    font-size: 0.875rem;
+    font-weight: 700;
+    height: auto;
+    justify-content: center;
+    line-height: 1.25rem;
+    min-height: 2.5rem;
+    padding: 0.625rem 1rem;
+    transition:
+        transform 200ms ease,
+        background-color 200ms ease,
+        box-shadow 200ms ease;
+}
+
+.solana-wallet-button .wallet-adapter-button-trigger {
+    box-shadow:
+        0 0 24px rgba(34, 42, 53, 0.06),
+        0 1px 1px rgba(0, 0, 0, 0.05),
+        0 0 0 1px rgba(34, 42, 53, 0.04),
+        0 0 4px rgba(34, 42, 53, 0.08),
+        0 16px 68px rgba(47, 48, 55, 0.05),
+        0 1px 0 rgba(255, 255, 255, 0.1) inset;
+}
+
+.solana-wallet-button .wallet-adapter-button:not([disabled]):hover {
+    background-color: #f5f5f5;
+    transform: translateY(-2px);
+}
+
+.solana-wallet-button .wallet-adapter-button:not([disabled]):focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+}
+
+.solana-wallet-button .wallet-adapter-button-start-icon,
+.solana-wallet-button .wallet-adapter-button-end-icon,
+.solana-wallet-button .wallet-adapter-button-start-icon img,
+.solana-wallet-button .wallet-adapter-button-end-icon img {
+    height: 1rem;
+    width: 1rem;
+}
+
+.solana-wallet-button .wallet-adapter-button-start-icon {
+    margin-right: 0.5rem;
+}
+
+.solana-wallet-button .wallet-adapter-button-end-icon {
+    margin-left: 0.5rem;
+}
+
+.solana-wallet-button .wallet-adapter-dropdown-list {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 0.875rem;
+    box-shadow:
+        0 18px 50px rgba(15, 23, 42, 0.16),
+        0 4px 14px rgba(15, 23, 42, 0.08);
+    padding: 0.5rem;
+    right: 0;
+    top: calc(100% + 0.5rem);
+}
+
+.solana-wallet-button .wallet-adapter-dropdown-list-item {
+    border-radius: 0.625rem;
+    color: var(--foreground);
+    font-family: inherit;
+    font-size: 0.875rem;
+    font-weight: 600;
+    justify-content: flex-start;
+}
+
+.solana-wallet-button .wallet-adapter-dropdown-list-item:not([disabled]):hover {
+    background: var(--secondary);
+}
+
+.solana-wallet-button-full,
+.solana-wallet-button-full .wallet-adapter-dropdown {
+    width: 100%;
+}
+
+.solana-wallet-button-full .wallet-adapter-button {
+    width: 100%;
+}
