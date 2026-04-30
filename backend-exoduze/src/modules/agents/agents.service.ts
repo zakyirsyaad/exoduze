@@ -4,6 +4,22 @@ import type { AppDatabase } from "../../db/database.js";
 import { queryOne, queryRows } from "../../db/query.js";
 import { createStableId, slugify } from "../../lib/ids.js";
 import { HttpError, isPgErrorCode } from "../../lib/http-error.js";
+import type {
+  AgentSpecialization,
+  AgentVisibility,
+  DataFocus,
+  RiskProfile,
+} from "../ai/battle-config.js";
+import {
+  agentSpecializations,
+  dataFocusOptions,
+  getDefaultBasePersonality,
+  getDefaultBaseStrategy,
+  getDefaultCategorySlugsForSpecialization,
+  getDefaultDataFocus,
+  riskProfiles,
+  visibilityOptions,
+} from "../ai/battle-config.js";
 import type { RequestAuth } from "../auth/auth.types.js";
 import { effectiveMarketStatusSql } from "../markets/market-status.js";
 
@@ -36,6 +52,13 @@ type AgentBaseRow = {
   status: string;
   avatar_uri: string | null;
   created_at: string;
+  updated_at: string;
+  specialization: AgentSpecialization;
+  base_personality: string | null;
+  base_strategy: string | null;
+  risk_profile: RiskProfile;
+  data_focus: unknown;
+  visibility: AgentVisibility;
   owner_wallet_address: string | null;
   owner_is_active: boolean | null;
   latest_version_id: string | null;
@@ -118,10 +141,16 @@ type AgentMutationInput = {
   ownerWallet?: string | undefined;
   slug?: string | undefined;
   name: string;
-  description: string;
+  description?: string | undefined;
   status: string;
   avatarUri?: string | null | undefined;
-  categorySlugs: string[];
+  categorySlugs?: string[] | undefined;
+  specialization?: AgentSpecialization | undefined;
+  basePersonality?: string | undefined;
+  baseStrategy?: string | undefined;
+  riskProfile?: RiskProfile | undefined;
+  dataFocus?: DataFocus[] | undefined;
+  visibility?: AgentVisibility | undefined;
 };
 
 type ManagedAgentRecord = {
@@ -131,6 +160,12 @@ type ManagedAgentRecord = {
   description: string;
   status: string;
   avatar_uri: string | null;
+  specialization: AgentSpecialization;
+  base_personality: string | null;
+  base_strategy: string | null;
+  risk_profile: RiskProfile;
+  data_focus: unknown;
+  visibility: AgentVisibility;
   owner_wallet_identity_id: string | null;
   owner_wallet_address: string | null;
 };
@@ -145,6 +180,8 @@ export class AgentsService {
     if (query.ownerWallet) {
       where.push(`w.wallet_address = $${params.length + 1}`);
       params.push(query.ownerWallet);
+    } else {
+      where.push(`COALESCE(a.visibility, 'public') = 'public'`);
     }
 
     if (query.status) {
@@ -552,7 +589,18 @@ export class AgentsService {
       const ownerIdentity = await this.ensureWalletIdentity(ownerWallet, client);
       const slug = this.ensureAgentSlug(input.slug ?? input.name);
       const id = createStableId("agt", `${ownerWallet}:${slug}`);
-      const categoryRows = await this.requireAgentCategories(input.categorySlugs, client);
+      const profile = this.resolveAgentProfileInput({
+        name: input.name,
+        description: input.description,
+        categorySlugs: input.categorySlugs,
+        specialization: input.specialization,
+        basePersonality: input.basePersonality,
+        baseStrategy: input.baseStrategy,
+        riskProfile: input.riskProfile,
+        dataFocus: input.dataFocus,
+        visibility: input.visibility,
+      });
+      const categoryRows = await this.requireAgentCategories(profile.categorySlugs, client);
 
       await client.query(
         `
@@ -564,20 +612,32 @@ export class AgentsService {
             owner_wallet_identity_id,
             status,
             avatar_uri,
+            specialization,
+            base_personality,
+            base_strategy,
+            risk_profile,
+            data_focus,
+            visibility,
             created_at,
             updated_at
           ) VALUES (
-            $1, $2, $3, $4, $5, $6, $7, now(), now()
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13, now(), now()
           )
         `,
         [
           id,
           slug,
           input.name.trim(),
-          input.description.trim(),
+          profile.description,
           ownerIdentity.id,
           input.status,
-          input.avatarUri ?? null
+          input.avatarUri ?? null,
+          profile.specialization,
+          profile.basePersonality,
+          profile.baseStrategy,
+          profile.riskProfile,
+          JSON.stringify(profile.dataFocus),
+          profile.visibility,
         ]
       );
 
@@ -638,6 +698,16 @@ export class AgentsService {
       description: row.description,
       status: row.status,
       avatar_uri: row.avatar_uri,
+      specialization: row.specialization,
+      base_personality:
+        row.base_personality ?? getDefaultBasePersonality(row.specialization),
+      base_strategy:
+        row.base_strategy ?? getDefaultBaseStrategy(row.specialization),
+      risk_profile: row.risk_profile,
+      data_focus: this.normalizeDataFocusValue(row.data_focus, row.specialization),
+      visibility: row.visibility,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
       owner: row.owner_wallet_address
         ? {
             wallet_address: row.owner_wallet_address,
@@ -731,21 +801,34 @@ export class AgentsService {
         Object.prototype.hasOwnProperty.call(input, "ownerWallet") ? input.ownerWallet : existing.owner_wallet_address ?? undefined
       );
       const ownerIdentity = await this.ensureWalletIdentity(ownerWallet, client);
-      const categorySlugs =
-        replace ? input.categorySlugs : input.categorySlugs ?? (await this.getAgentCategorySlugs(existing.id, client));
-
-      if (!categorySlugs) {
-        throw new HttpError(400, "AGENT_CATEGORIES_REQUIRED", "category_slugs is required for this request.");
-      }
-
-      const categoryRows = await this.requireAgentCategories(categorySlugs, client);
       const name = (replace ? input.name : input.name ?? existing.name)?.trim();
-      const description = (replace ? input.description : input.description ?? existing.description)?.trim();
+      const description = (
+        replace ? input.description : input.description ?? existing.description
+      )?.trim() ?? "";
       const status = replace ? input.status : input.status ?? existing.status;
 
-      if (!name || !description || !status) {
+      if (!name || !status) {
         throw new HttpError(400, "INVALID_AGENT_PAYLOAD", "Required agent fields are missing.");
       }
+
+      const profile = this.resolveAgentProfileInput({
+        name,
+        description,
+        categorySlugs:
+          input.categorySlugs ?? (await this.getAgentCategorySlugs(existing.id, client)),
+        specialization: replace ? input.specialization : input.specialization ?? existing.specialization,
+        basePersonality:
+          replace ? input.basePersonality : input.basePersonality ?? existing.base_personality ?? undefined,
+        baseStrategy:
+          replace ? input.baseStrategy : input.baseStrategy ?? existing.base_strategy ?? undefined,
+        riskProfile: replace ? input.riskProfile : input.riskProfile ?? existing.risk_profile,
+        dataFocus:
+          replace
+            ? input.dataFocus
+            : input.dataFocus ?? this.normalizeDataFocusValue(existing.data_focus, existing.specialization),
+        visibility: replace ? input.visibility : input.visibility ?? existing.visibility,
+      });
+      const categoryRows = await this.requireAgentCategories(profile.categorySlugs, client);
 
       const slug = replace
         ? this.ensureAgentSlug(input.slug ?? name)
@@ -768,10 +851,30 @@ export class AgentsService {
             owner_wallet_identity_id = $5,
             status = $6,
             avatar_uri = $7,
+            specialization = $8,
+            base_personality = $9,
+            base_strategy = $10,
+            risk_profile = $11,
+            data_focus = $12::jsonb,
+            visibility = $13,
             updated_at = now()
           WHERE id = $1
         `,
-        [existing.id, slug, name, description, ownerIdentity.id, status, avatarUri]
+        [
+          existing.id,
+          slug,
+          name,
+          profile.description,
+          ownerIdentity.id,
+          status,
+          avatarUri,
+          profile.specialization,
+          profile.basePersonality,
+          profile.baseStrategy,
+          profile.riskProfile,
+          JSON.stringify(profile.dataFocus),
+          profile.visibility,
+        ]
       );
 
       await this.syncAgentCategories(client, existing.id, categoryRows);
@@ -908,6 +1011,13 @@ export class AgentsService {
           a.status,
           a.avatar_uri,
           a.created_at::text,
+          a.updated_at::text,
+          a.specialization,
+          a.base_personality,
+          a.base_strategy,
+          a.risk_profile,
+          a.data_focus,
+          a.visibility,
           w.wallet_address AS owner_wallet_address,
           w.is_active AS owner_is_active,
           lv.latest_version_id,
@@ -955,6 +1065,12 @@ export class AgentsService {
           a.description,
           a.status,
           a.avatar_uri,
+          a.specialization,
+          a.base_personality,
+          a.base_strategy,
+          a.risk_profile,
+          a.data_focus,
+          a.visibility,
           a.owner_wallet_identity_id,
           w.wallet_address AS owner_wallet_address
         FROM agents a
@@ -1063,6 +1179,91 @@ export class AgentsService {
 
     const rowsBySlug = new Map(rows.map((row) => [row.slug, row]));
     return normalizedSlugs.map((slug) => rowsBySlug.get(slug)).filter((row): row is { id: string; slug: string } => Boolean(row));
+  }
+
+  private resolveAgentProfileInput(input: {
+    name: string;
+    description?: string | undefined;
+    categorySlugs?: string[] | undefined;
+    specialization?: AgentSpecialization | undefined;
+    basePersonality?: string | undefined;
+    baseStrategy?: string | undefined;
+    riskProfile?: RiskProfile | undefined;
+    dataFocus?: DataFocus[] | undefined;
+    visibility?: AgentVisibility | undefined;
+  }) {
+    const specialization = this.normalizeSpecialization(input.specialization);
+    const description = input.description?.trim() ?? "";
+    const basePersonality =
+      input.basePersonality?.trim() || getDefaultBasePersonality(specialization);
+    const baseStrategy =
+      input.baseStrategy?.trim() || getDefaultBaseStrategy(specialization);
+    const riskProfile = this.normalizeRiskProfile(input.riskProfile);
+    const dataFocus = this.normalizeDataFocusValue(
+      input.dataFocus,
+      specialization,
+    );
+    const visibility = this.normalizeVisibility(input.visibility);
+    const categorySlugs =
+      input.categorySlugs?.length
+        ? [...new Set(input.categorySlugs.map((slug) => slugify(slug)).filter(Boolean))]
+        : getDefaultCategorySlugsForSpecialization(specialization);
+
+    return {
+      description,
+      specialization,
+      basePersonality,
+      baseStrategy,
+      riskProfile,
+      dataFocus,
+      visibility,
+      categorySlugs,
+    };
+  }
+
+  private normalizeSpecialization(value?: string | undefined): AgentSpecialization {
+    if (value && agentSpecializations.includes(value as AgentSpecialization)) {
+      return value as AgentSpecialization;
+    }
+
+    return "general";
+  }
+
+  private normalizeRiskProfile(value?: string | undefined): RiskProfile {
+    if (value && riskProfiles.includes(value as RiskProfile)) {
+      return value as RiskProfile;
+    }
+
+    return "balanced";
+  }
+
+  private normalizeVisibility(value?: string | undefined): AgentVisibility {
+    if (value && visibilityOptions.includes(value as AgentVisibility)) {
+      return value as AgentVisibility;
+    }
+
+    return "public";
+  }
+
+  private normalizeDataFocusValue(
+    value: unknown,
+    specialization: AgentSpecialization,
+  ): DataFocus[] {
+    if (!Array.isArray(value)) {
+      return getDefaultDataFocus(specialization);
+    }
+
+    const normalized = [
+      ...new Set(
+        value
+          .filter((entry): entry is string => typeof entry === "string")
+          .filter((entry): entry is DataFocus =>
+            dataFocusOptions.includes(entry as DataFocus),
+          ),
+      ),
+    ];
+
+    return normalized.length ? normalized : getDefaultDataFocus(specialization);
   }
 
   private async syncAgentCategories(

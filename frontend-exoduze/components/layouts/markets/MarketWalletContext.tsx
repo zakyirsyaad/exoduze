@@ -3,6 +3,8 @@
 import * as React from "react"
 import { useWallet } from "@solana/react-hooks"
 
+import { PayoutBreakdown } from "@/components/markets/PayoutBreakdown"
+import { TopAgentBonusBadge } from "@/components/markets/TopAgentBonusBadge"
 import { useUserTimeZone } from "@/components/time/UserTimeZoneProvider"
 import {
   Card,
@@ -187,9 +189,14 @@ export function MarketWalletContext({ slug }: MarketWalletContextProps) {
               >
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
-                    <p className="font-medium">
-                      {agentNameById.get(position.agent_id) ?? "AI Agent"}
-                    </p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="font-medium">
+                        {agentNameById.get(position.agent_id) ?? "AI Agent"}
+                      </p>
+                      {position.top_bonus_eligible ? (
+                        <TopAgentBonusBadge />
+                      ) : null}
+                    </div>
                     <p className="text-neutral-500">
                       Opened{" "}
                       {formatDateTimeForTimeZone(position.opened_at, {
@@ -228,10 +235,15 @@ export function MarketWalletContext({ slug }: MarketWalletContextProps) {
               >
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
-                    <p className="font-medium">
-                      {agentNameByMarketAgentId.get(payout.market_agent_id) ??
-                        "AI Agent"}
-                    </p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="font-medium">
+                        {agentNameByMarketAgentId.get(payout.market_agent_id) ??
+                          "AI Agent"}
+                      </p>
+                      {payout.top_bonus_eligible ? (
+                        <TopAgentBonusBadge />
+                      ) : null}
+                    </div>
                     <p className="text-neutral-500">
                       {payout.paid_at
                         ? `Paid ${formatDateTimeForTimeZone(payout.paid_at, {
@@ -244,9 +256,17 @@ export function MarketWalletContext({ slug }: MarketWalletContextProps) {
                     {formatTextLabel(payout.status)}
                   </Badge>
                 </div>
-                <p className="mt-3 font-medium">
-                  {formatCurrency(payout.net_usdc)}
-                </p>
+                <div className="mt-3 space-y-1">
+                  <p className="text-[11px] uppercase tracking-normal text-neutral-500">
+                    Claimable total
+                  </p>
+                  <p className="font-medium">
+                    {formatCurrency(payout.breakdown?.net_usdc ?? payout.net_usdc)}
+                  </p>
+                </div>
+                {payout.breakdown ? (
+                  <PayoutBreakdown breakdown={payout.breakdown} />
+                ) : null}
               </article>
             ))
           ) : (

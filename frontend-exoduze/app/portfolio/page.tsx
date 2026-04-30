@@ -7,6 +7,9 @@ import { RefreshIcon, Wallet01Icon } from "@hugeicons/core-free-icons"
 import { useWallet } from "@solana/react-hooks"
 import { toast } from "sonner"
 
+import { PayoutBreakdown } from "@/components/markets/PayoutBreakdown"
+import { TopAgentBonusBadge } from "@/components/markets/TopAgentBonusBadge"
+import { ClaimPayoutDialog } from "@/components/portfolio/ClaimPayoutDialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -48,6 +51,9 @@ export default function PortfolioPage() {
   const [claimingPayoutId, setClaimingPayoutId] = React.useState<string | null>(
     null
   )
+  const [claimDialogPayoutId, setClaimDialogPayoutId] = React.useState<
+    string | null
+  >(null)
 
   const walletAddress = auth.session?.wallet.wallet_address ?? null
   const connectedWallet =
@@ -55,6 +61,13 @@ export default function PortfolioPage() {
       ? wallet.session.account.address.toString()
       : null
   const claimConfiguration = React.useMemo(() => getClaimConfiguration(), [])
+  const claimDialogPayout = React.useMemo(
+    () =>
+      portfolio?.data.payouts.find(
+        (payout) => payout.id === claimDialogPayoutId
+      ) ?? null,
+    [claimDialogPayoutId, portfolio?.data.payouts]
+  )
 
   const loadPortfolio = React.useCallback(async () => {
     if (!walletAddress) {
@@ -84,6 +97,43 @@ export default function PortfolioPage() {
 
     return () => window.clearTimeout(timeoutId)
   }, [loadPortfolio])
+
+  React.useEffect(() => {
+    if (claimDialogPayoutId && portfolio && !claimDialogPayout) {
+      setClaimDialogPayoutId(null)
+    }
+  }, [claimDialogPayout, claimDialogPayoutId, portfolio])
+
+  const openClaimDialog = React.useCallback(
+    (payout: PortfolioPayout) => {
+      const disabledReason = getClaimDisabledReason(
+        payout,
+        walletAddress,
+        claimConfiguration
+      )
+
+      if (disabledReason) {
+        toast.error(disabledReason)
+        return
+      }
+
+      setClaimDialogPayoutId(payout.id)
+    },
+    [claimConfiguration, walletAddress]
+  )
+
+  const handleClaimDialogOpenChange = React.useCallback(
+    (open: boolean) => {
+      if (claimingPayoutId) {
+        return
+      }
+
+      if (!open) {
+        setClaimDialogPayoutId(null)
+      }
+    },
+    [claimingPayoutId]
+  )
 
   const handleClaim = React.useCallback(
     async (payout: PortfolioPayout) => {
@@ -137,9 +187,12 @@ export default function PortfolioPage() {
           }
         )
         setPortfolio(updated)
+        setClaimDialogPayoutId(null)
         toast.success("Payout claim submitted")
       } catch (err) {
-        toast.error(err instanceof Error ? err.message : "Unable to claim payout")
+        toast.error(
+          err instanceof Error ? err.message : "Unable to claim payout"
+        )
       } finally {
         setClaimingPayoutId(null)
       }
@@ -148,7 +201,12 @@ export default function PortfolioPage() {
   )
 
   if (auth.loading) {
-    return <PortfolioShell title="Portfolio" description="Checking wallet session..." />
+    return (
+      <PortfolioShell
+        title="Portfolio"
+        description="Checking wallet session..."
+      />
+    )
   }
 
   if (!walletAddress) {
@@ -219,7 +277,7 @@ export default function PortfolioPage() {
         </Card>
       </section>
 
-      <section className="grid gap-6 xl:grid-cols-[1fr_0.9fr] h-[500px]">
+      <section className="grid h-[500px] gap-6 xl:grid-cols-[1fr_0.9fr]">
         <Card>
           <CardHeader>
             <CardTitle>User Participant</CardTitle>
@@ -237,12 +295,17 @@ export default function PortfolioPage() {
                   >
                     <div className="flex flex-wrap items-start justify-between gap-3">
                       <div>
-                        <Link
-                          href={`/markets/${item.market.slug}`}
-                          className="font-medium hover:underline"
-                        >
-                          {item.market.title}
-                        </Link>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Link
+                            href={`/markets/${item.market.slug}`}
+                            className="font-medium hover:underline"
+                          >
+                            {item.market.title}
+                          </Link>
+                          {item.agent.top_bonus_eligible ? (
+                            <TopAgentBonusBadge />
+                          ) : null}
+                        </div>
                         <p className="mt-1 text-sm text-neutral-500">
                           Following {item.agent.name}
                         </p>
@@ -252,7 +315,10 @@ export default function PortfolioPage() {
                       </Badge>
                     </div>
                     <div className="mt-4 grid gap-3 text-sm md:grid-cols-3">
-                      <Metric label="Stake" value={formatUsdc(item.position.stake_usdc)} />
+                      <Metric
+                        label="Stake"
+                        value={formatUsdc(item.position.stake_usdc)}
+                      />
                       <Metric
                         label="Decision"
                         value={item.agent.final_decision_side ?? "Pending"}
@@ -292,12 +358,17 @@ export default function PortfolioPage() {
                   >
                     <div className="flex flex-wrap items-start justify-between gap-3">
                       <div>
-                        <Link
-                          href={`/markets/${item.market.slug}`}
-                          className="font-medium hover:underline"
-                        >
-                          {item.agent.name}
-                        </Link>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Link
+                            href={`/markets/${item.market.slug}`}
+                            className="font-medium hover:underline"
+                          >
+                            {item.agent.name}
+                          </Link>
+                          {item.top_bonus_eligible ? (
+                            <TopAgentBonusBadge />
+                          ) : null}
+                        </div>
                         <p className="mt-1 text-sm text-neutral-500">
                           {item.market.title}
                         </p>
@@ -322,7 +393,6 @@ export default function PortfolioPage() {
                 <EmptyState text="No owned AI agents have joined a market yet." />
               )}
             </ScrollArea>
-
           </CardContent>
         </Card>
       </section>
@@ -331,7 +401,8 @@ export default function PortfolioPage() {
         <CardHeader>
           <CardTitle>Manual Claims</CardTitle>
           <CardDescription>
-            Claimable payouts require a wallet-signed transaction.
+            Review the payout breakdown, then sign the claim transaction from
+            your wallet.
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-3">
@@ -341,7 +412,6 @@ export default function PortfolioPage() {
             </p>
           ) : null}
           <ScrollArea className="h-[500px] pr-3 pb-20">
-
             {data?.payouts.length ? (
               data.payouts.map((payout) => {
                 const disabledReason = getClaimDisabledReason(
@@ -349,7 +419,8 @@ export default function PortfolioPage() {
                   walletAddress,
                   claimConfiguration
                 )
-                const canClaim = payout.status === "claimable" && !disabledReason
+                const canClaim =
+                  payout.status === "claimable" && !disabledReason
 
                 return (
                   <article
@@ -364,6 +435,9 @@ export default function PortfolioPage() {
                         >
                           {payout.market.title}
                         </Link>
+                        {payout.top_bonus_eligible ? (
+                          <TopAgentBonusBadge />
+                        ) : null}
                         <Badge variant="outline" className="rounded">
                           {formatLabel(payout.status)}
                         </Badge>
@@ -375,17 +449,27 @@ export default function PortfolioPage() {
                           : ""}
                       </p>
                     </div>
-                    <div className="flex flex-wrap items-center gap-3">
-                      <p className="text-sm font-medium">
-                        {formatUsdc(payout.net_usdc)}
-                      </p>
+                    <div className="flex min-w-[220px] flex-col items-start gap-2 md:items-end">
+                      <div className="space-y-1 text-left md:text-right">
+                        <p className="text-[11px] tracking-normal text-neutral-500 uppercase">
+                          Claimable total
+                        </p>
+                        <p className="text-sm font-medium">
+                          {formatUsdc(
+                            payout.breakdown?.net_usdc ?? payout.net_usdc
+                          )}
+                        </p>
+                      </div>
+                      {payout.breakdown ? (
+                        <PayoutBreakdown breakdown={payout.breakdown} />
+                      ) : null}
                       <Button
                         type="button"
-                        disabled={!canClaim || claimingPayoutId === payout.id}
-                        onClick={() => void handleClaim(payout)}
+                        disabled={!canClaim || claimingPayoutId !== null}
+                        onClick={() => openClaimDialog(payout)}
                       >
                         <HugeiconsIcon icon={Wallet01Icon} />
-                        {claimingPayoutId === payout.id ? "Claiming" : "Claim"}
+                        Review claim
                       </Button>
                     </div>
                     {disabledReason && payout.status === "claimable" ? (
@@ -402,6 +486,26 @@ export default function PortfolioPage() {
           </ScrollArea>
         </CardContent>
       </Card>
+      <ClaimPayoutDialog
+        open={Boolean(claimDialogPayout)}
+        onOpenChange={handleClaimDialogOpenChange}
+        payout={claimDialogPayout}
+        submitting={claimingPayoutId === claimDialogPayout?.id}
+        onConfirm={() => {
+          if (claimDialogPayout) {
+            void handleClaim(claimDialogPayout)
+          }
+        }}
+        disabledReason={
+          claimDialogPayout
+            ? getClaimDisabledReason(
+                claimDialogPayout,
+                walletAddress,
+                claimConfiguration
+              )
+            : null
+        }
+      />
     </main>
   )
 }
@@ -504,15 +608,15 @@ function getClaimDisabledReason(
 
 type ClaimConfiguration =
   | {
-    ready: true
-    reason: null
-    settlementMint: string
-    treasuryTokenAccount: string
-  }
+      ready: true
+      reason: null
+      settlementMint: string
+      treasuryTokenAccount: string
+    }
   | {
-    ready: false
-    reason: string
-  }
+      ready: false
+      reason: string
+    }
 
 function getClaimConfiguration(): ClaimConfiguration {
   const settlementMint = getExoduzeProgramConfig().settlementMint

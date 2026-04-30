@@ -2,6 +2,12 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 
 import { AgentsService } from "../modules/agents/agents.service.js";
+import {
+  agentSpecializations,
+  dataFocusOptions,
+  riskProfiles,
+  visibilityOptions,
+} from "../modules/ai/battle-config.js";
 
 const listAgentsQuerySchema = z.object({
   owner_wallet: z.string().optional(),
@@ -23,14 +29,25 @@ const ownerAgentsQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(100).default(50)
 });
 
+const specializationSchema = z.enum(agentSpecializations);
+const riskProfileSchema = z.enum(riskProfiles);
+const dataFocusSchema = z.enum(dataFocusOptions);
+const visibilitySchema = z.enum(visibilityOptions);
+
 const agentCreateBodySchema = z.object({
   owner_wallet: z.string().optional(),
   slug: z.string().optional(),
   name: z.string().min(1),
-  description: z.string().min(1),
+  description: z.string().default(""),
   status: z.enum(["active", "inactive"]).default("active"),
   avatar_uri: z.string().url().nullable().optional(),
-  category_slugs: z.array(z.string().min(1)).min(1)
+  category_slugs: z.array(z.string().min(1)).min(1).optional(),
+  specialization: specializationSchema.optional(),
+  base_personality: z.string().min(1).optional(),
+  base_strategy: z.string().min(1).optional(),
+  risk_profile: riskProfileSchema.optional(),
+  data_focus: z.array(dataFocusSchema).max(dataFocusOptions.length).optional(),
+  visibility: visibilitySchema.default("public")
 });
 
 const agentPatchBodySchema = z
@@ -38,10 +55,16 @@ const agentPatchBodySchema = z
     owner_wallet: z.string().optional(),
     slug: z.string().optional(),
     name: z.string().min(1).optional(),
-    description: z.string().min(1).optional(),
+    description: z.string().optional(),
     status: z.enum(["active", "inactive"]).optional(),
     avatar_uri: z.string().url().nullable().optional(),
-    category_slugs: z.array(z.string().min(1)).min(1).optional()
+    category_slugs: z.array(z.string().min(1)).min(1).optional(),
+    specialization: specializationSchema.optional(),
+    base_personality: z.string().min(1).optional(),
+    base_strategy: z.string().min(1).optional(),
+    risk_profile: riskProfileSchema.optional(),
+    data_focus: z.array(dataFocusSchema).max(dataFocusOptions.length).optional(),
+    visibility: visibilitySchema.optional()
   })
   .refine((value) => Object.keys(value).length > 0, {
     message: "At least one agent field must be provided."
@@ -74,7 +97,13 @@ export async function registerAgentRoutes(app: FastifyInstance, service: AgentsS
       description: body.description,
       status: body.status,
       avatarUri: body.avatar_uri,
-      categorySlugs: body.category_slugs
+      categorySlugs: body.category_slugs,
+      specialization: body.specialization,
+      basePersonality: body.base_personality,
+      baseStrategy: body.base_strategy,
+      riskProfile: body.risk_profile,
+      dataFocus: body.data_focus,
+      visibility: body.visibility
     });
   });
 
@@ -102,7 +131,13 @@ export async function registerAgentRoutes(app: FastifyInstance, service: AgentsS
       description: body.description,
       status: body.status,
       avatarUri: body.avatar_uri,
-      categorySlugs: body.category_slugs
+      categorySlugs: body.category_slugs,
+      specialization: body.specialization,
+      basePersonality: body.base_personality,
+      baseStrategy: body.base_strategy,
+      riskProfile: body.risk_profile,
+      dataFocus: body.data_focus,
+      visibility: body.visibility
     });
   });
 
@@ -121,7 +156,13 @@ export async function registerAgentRoutes(app: FastifyInstance, service: AgentsS
       ...(body.description !== undefined ? { description: body.description } : {}),
       ...(body.status !== undefined ? { status: body.status } : {}),
       ...(body.avatar_uri !== undefined ? { avatarUri: body.avatar_uri } : {}),
-      ...(body.category_slugs !== undefined ? { categorySlugs: body.category_slugs } : {})
+      ...(body.category_slugs !== undefined ? { categorySlugs: body.category_slugs } : {}),
+      ...(body.specialization !== undefined ? { specialization: body.specialization } : {}),
+      ...(body.base_personality !== undefined ? { basePersonality: body.base_personality } : {}),
+      ...(body.base_strategy !== undefined ? { baseStrategy: body.base_strategy } : {}),
+      ...(body.risk_profile !== undefined ? { riskProfile: body.risk_profile } : {}),
+      ...(body.data_focus !== undefined ? { dataFocus: body.data_focus } : {}),
+      ...(body.visibility !== undefined ? { visibility: body.visibility } : {})
     };
 
     return service.patchAgent(auth, params.agentIdOrSlug, payload);

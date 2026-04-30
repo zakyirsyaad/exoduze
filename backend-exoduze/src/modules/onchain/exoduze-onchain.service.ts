@@ -17,6 +17,8 @@ const AnchorBN = require("bn.js");
 const CONFIG_SEED = "config";
 const MARKET_SEED = "market";
 const VAULT_SEED = "vault";
+const AGENT_COMMITMENT_SEED = "agent_commitment";
+const POSITION_SEED = "position";
 
 type CreateOnchainMarketInput = {
   marketId: string;
@@ -50,12 +52,51 @@ type ResolveOnchainMarketResult = {
   outcome: "YES" | "NO";
 };
 
+type CancelOnchainMarketInput = {
+  marketPubkey: string;
+};
+
+type CancelOnchainMarketResult = {
+  already_cancelled: boolean;
+  tx_sig: string | null;
+  market_pubkey: string;
+  status: "CANCELLED";
+};
+
+export type OnchainConfigSummary = {
+  config_pubkey: string;
+  admin_authority: string;
+  oracle_authority: string;
+  treasury_authority: string;
+  fee_bps: number;
+  paused: boolean;
+};
+
+type UpdateTreasuryAuthorityInput = {
+  treasuryAuthority: string;
+};
+
+type UpdateTreasuryAuthorityResult = OnchainConfigSummary & {
+  already_set: boolean;
+  tx_sig: string | null;
+};
+
 export type OnchainSignatureStatus = {
   confirmation_status: string | null;
   confirmed: boolean;
   failed: boolean;
   found: boolean;
   slot: number | null;
+};
+
+export type OnchainPositionAccount = {
+  agent_commitment: string;
+  claimed_amount_base_units: string;
+  market: string;
+  side: "YES" | "NO" | null;
+  stake_amount_base_units: string;
+  status: "OPEN" | "CLAIMED" | "REFUNDED" | null;
+  user: string;
 };
 
 type ProgramRole = "admin" | "oracle";
@@ -186,6 +227,116 @@ export class ExoduzeOnchainService {
     };
   }
 
+  async cancelMarket(input: CancelOnchainMarketInput): Promise<CancelOnchainMarketResult> {
+    const program = this.getProgram("admin");
+    const adminWallet = this.getWallet("admin");
+    const [configPda] = this.deriveConfigPda();
+    const marketPubkey = this.parsePublicKey(input.marketPubkey, "marketPubkey");
+    const marketAccountInfo = await this.connection.getAccountInfo(marketPubkey, "confirmed");
+
+    if (!marketAccountInfo) {
+      throw new HttpError(
+        404,
+        "ONCHAIN_MARKET_NOT_FOUND",
+        `On-chain market '${input.marketPubkey}' was not found.`
+      );
+    }
+
+    const marketAccount = await program.account.market.fetch(marketPubkey);
+    const existingStatus = this.normalizeMarketStatus(marketAccount?.status);
+
+    if (existingStatus === "CANCELLED") {
+      return {
+        already_cancelled: true,
+        tx_sig: null,
+        market_pubkey: marketPubkey.toBase58(),
+        status: "CANCELLED"
+      };
+    }
+
+    if (existingStatus && existingStatus !== "ACTIVE") {
+      throw new HttpError(
+        409,
+        "ONCHAIN_MARKET_CANCEL_CONFLICT",
+        `On-chain market '${input.marketPubkey}' is already '${existingStatus.toLowerCase()}'.`
+      );
+    }
+
+    const signature = await program.methods
+      .cancelMarket()
+      .accounts({
+        config: configPda,
+        market: marketPubkey,
+        authority: adminWallet.publicKey
+      })
+      .rpc();
+
+    return {
+      already_cancelled: false,
+      tx_sig: signature,
+      market_pubkey: marketPubkey.toBase58(),
+      status: "CANCELLED"
+    };
+  }
+
+  async getConfig(): Promise<OnchainConfigSummary | null> {
+    const program = this.getProgram("admin");
+    const configState = await this.fetchConfigState(program);
+
+    if (!configState) {
+      return null;
+    }
+
+    return this.toConfigSummary(configState.configPda, configState.configAccount);
+  }
+
+  async updateTreasuryAuthority(
+    input: UpdateTreasuryAuthorityInput
+  ): Promise<UpdateTreasuryAuthorityResult> {
+    const program = this.getProgram("admin");
+    const adminWallet = this.getWallet("admin");
+    const treasuryAuthority = this.parsePublicKey(input.treasuryAuthority, "treasuryAuthority");
+    const configState = await this.fetchConfigState(program);
+
+    if (!configState) {
+      throw new HttpError(404, "ONCHAIN_CONFIG_NOT_FOUND", "On-chain config was not found.");
+    }
+
+    const currentConfig = this.toConfigSummary(configState.configPda, configState.configAccount);
+
+    if (currentConfig.treasury_authority === treasuryAuthority.toBase58()) {
+      return {
+        already_set: true,
+        tx_sig: null,
+        ...currentConfig
+      };
+    }
+
+    const signature = await program.methods
+      .updateTreasuryAuthority(treasuryAuthority)
+      .accounts({
+        config: configState.configPda,
+        adminAuthority: adminWallet.publicKey
+      })
+      .rpc();
+
+    const updatedConfigState = await this.fetchConfigState(program);
+
+    if (!updatedConfigState) {
+      throw new HttpError(
+        500,
+        "ONCHAIN_CONFIG_MISSING",
+        "On-chain config disappeared after updating treasury authority."
+      );
+    }
+
+    return {
+      already_set: false,
+      tx_sig: signature,
+      ...this.toConfigSummary(updatedConfigState.configPda, updatedConfigState.configAccount)
+    };
+  }
+
   async getSignatureStatus(signature: string): Promise<OnchainSignatureStatus> {
     const status = await this.connection.getSignatureStatus(signature, {
       searchTransactionHistory: true
@@ -231,6 +382,13 @@ export class ExoduzeOnchainService {
     return accountInfo !== null;
   }
 
+  async isAccountOwnedByCurrentProgram(accountAddress: string): Promise<boolean> {
+    const publicKey = this.parsePublicKey(accountAddress, "accountAddress");
+    const accountInfo = await this.connection.getAccountInfo(publicKey, "confirmed");
+
+    return accountInfo?.owner.equals(this.programId) ?? false;
+  }
+
   deriveConfigPda(): [PublicKey, number] {
     return PublicKey.findProgramAddressSync([Buffer.from(CONFIG_SEED)], this.programId);
   }
@@ -241,6 +399,78 @@ export class ExoduzeOnchainService {
 
   deriveVaultPda(market: PublicKey): [PublicKey, number] {
     return PublicKey.findProgramAddressSync([Buffer.from(VAULT_SEED), market.toBuffer()], this.programId);
+  }
+
+  deriveAgentCommitmentPda(marketAddress: string, agentAuthorityAddress: string): string {
+    const marketPubkey = this.parsePublicKey(marketAddress, "marketAddress");
+    const agentAuthority = this.parsePublicKey(agentAuthorityAddress, "agentAuthorityAddress");
+    const [commitmentPda] = PublicKey.findProgramAddressSync(
+      [
+        Buffer.from(AGENT_COMMITMENT_SEED),
+        marketPubkey.toBuffer(),
+        agentAuthority.toBuffer()
+      ],
+      this.programId
+    );
+
+    return commitmentPda.toBase58();
+  }
+
+  derivePositionPda(marketAddress: string, userAddress: string, agentCommitmentAddress: string): string {
+    const marketPubkey = this.parsePublicKey(marketAddress, "marketAddress");
+    const userPubkey = this.parsePublicKey(userAddress, "userAddress");
+    const agentCommitmentPubkey = this.parsePublicKey(
+      agentCommitmentAddress,
+      "agentCommitmentAddress"
+    );
+    const [positionPda] = PublicKey.findProgramAddressSync(
+      [
+        Buffer.from(POSITION_SEED),
+        marketPubkey.toBuffer(),
+        userPubkey.toBuffer(),
+        agentCommitmentPubkey.toBuffer()
+      ],
+      this.programId
+    );
+
+    return positionPda.toBase58();
+  }
+
+  async getPosition(accountAddress: string): Promise<OnchainPositionAccount | null> {
+    const program = this.getProgram("admin");
+    const publicKey = this.parsePublicKey(accountAddress, "accountAddress");
+    const accountInfo = await this.connection.getAccountInfo(publicKey, "confirmed");
+
+    if (!accountInfo) {
+      return null;
+    }
+
+    const positionAccount = await program.account.position.fetch(publicKey);
+
+    return {
+      agent_commitment: this.asPublicKey(
+        this.readAccountField(positionAccount, "agentCommitment", "agent_commitment"),
+        "position.agent_commitment"
+      ).toBase58(),
+      claimed_amount_base_units: this.asBigInt(
+        this.readAccountField(positionAccount, "claimedAmount", "claimed_amount"),
+        "position.claimed_amount"
+      ).toString(),
+      market: this.asPublicKey(
+        this.readAccountField(positionAccount, "market"),
+        "position.market"
+      ).toBase58(),
+      side: this.normalizeSide(this.readAccountField(positionAccount, "side")),
+      stake_amount_base_units: this.asBigInt(
+        this.readAccountField(positionAccount, "stakeAmount", "stake_amount"),
+        "position.stake_amount"
+      ).toString(),
+      status: this.normalizePositionStatus(this.readAccountField(positionAccount, "status")),
+      user: this.asPublicKey(
+        this.readAccountField(positionAccount, "user"),
+        "position.user"
+      ).toBase58()
+    };
   }
 
   isValidPublicKey(value: string | null | undefined): value is string {
@@ -333,6 +563,148 @@ export class ExoduzeOnchainService {
     return createHash("sha256").update(value).digest();
   }
 
+  private async fetchConfigState(program: any): Promise<{ configPda: PublicKey; configAccount: any } | null> {
+    const [configPda] = this.deriveConfigPda();
+    const configAccountInfo = await this.connection.getAccountInfo(configPda, "confirmed");
+
+    if (!configAccountInfo) {
+      return null;
+    }
+
+    const configAccount = await program.account.config.fetch(configPda);
+
+    return {
+      configPda,
+      configAccount
+    };
+  }
+
+  private toConfigSummary(configPda: PublicKey, configAccount: any): OnchainConfigSummary {
+    return {
+      config_pubkey: configPda.toBase58(),
+      admin_authority: this.asPublicKey(
+        this.readAccountField(configAccount, "adminAuthority", "admin_authority"),
+        "config.admin_authority"
+      ).toBase58(),
+      oracle_authority: this.asPublicKey(
+        this.readAccountField(configAccount, "oracleAuthority", "oracle_authority"),
+        "config.oracle_authority"
+      ).toBase58(),
+      treasury_authority: this.asPublicKey(
+        this.readAccountField(configAccount, "treasuryAuthority", "treasury_authority"),
+        "config.treasury_authority"
+      ).toBase58(),
+      fee_bps: this.asNumber(
+        this.readAccountField(configAccount, "feeBps", "fee_bps"),
+        "config.fee_bps"
+      ),
+      paused: this.asBoolean(this.readAccountField(configAccount, "paused"), "config.paused")
+    };
+  }
+
+  private readAccountField(account: unknown, ...keys: string[]): unknown {
+    if (!account || typeof account !== "object") {
+      return undefined;
+    }
+
+    const record = account as Record<string, unknown>;
+
+    for (const key of keys) {
+      if (record[key] !== undefined) {
+        return record[key];
+      }
+    }
+
+    return undefined;
+  }
+
+  private asPublicKey(value: unknown, field: string): PublicKey {
+    if (value instanceof PublicKey) {
+      return value;
+    }
+
+    if (typeof value === "string") {
+      return this.parsePublicKey(value, field);
+    }
+
+    if (
+      value &&
+      typeof value === "object" &&
+      "toBase58" in value &&
+      typeof (value as { toBase58?: unknown }).toBase58 === "function"
+    ) {
+      return this.parsePublicKey((value as { toBase58: () => string }).toBase58(), field);
+    }
+
+    throw new HttpError(500, "ONCHAIN_CONFIG_INVALID", `${field} must be a valid Solana public key.`);
+  }
+
+  private asNumber(value: unknown, field: string): number {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+
+    if (typeof value === "bigint") {
+      return Number(value);
+    }
+
+    if (
+      value &&
+      typeof value === "object" &&
+      "toNumber" in value &&
+      typeof (value as { toNumber?: unknown }).toNumber === "function"
+    ) {
+      return (value as { toNumber: () => number }).toNumber();
+    }
+
+    if (typeof value === "string" && value.trim()) {
+      const parsedValue = Number(value);
+
+      if (Number.isFinite(parsedValue)) {
+        return parsedValue;
+      }
+    }
+
+    throw new HttpError(500, "ONCHAIN_CONFIG_INVALID", `${field} must be numeric.`);
+  }
+
+  private asBigInt(value: unknown, field: string): bigint {
+    if (typeof value === "bigint") {
+      return value;
+    }
+
+    if (typeof value === "number" && Number.isSafeInteger(value)) {
+      return BigInt(value);
+    }
+
+    if (
+      value &&
+      typeof value === "object" &&
+      "toString" in value &&
+      typeof (value as { toString?: unknown }).toString === "function"
+    ) {
+      const normalized = (value as { toString: () => string }).toString().trim();
+
+      if (/^\d+$/.test(normalized)) {
+        return BigInt(normalized);
+      }
+    }
+
+    if (typeof value === "string" && /^\d+$/.test(value.trim())) {
+      return BigInt(value.trim());
+    }
+
+    throw new HttpError(500, "ONCHAIN_CONFIG_INVALID", `${field} must be an integer.`);
+  }
+
+  private asBoolean(value: unknown, field: string): boolean {
+    if (typeof value === "boolean") {
+      return value;
+    }
+
+    throw new HttpError(500, "ONCHAIN_CONFIG_INVALID", `${field} must be boolean.`);
+  }
+
   private normalizeSide(value: unknown): "YES" | "NO" | null {
     if (!value || typeof value !== "object") {
       return null;
@@ -368,6 +740,26 @@ export class ExoduzeOnchainService {
 
     if ("invalid" in value || "Invalid" in value) {
       return "INVALID";
+    }
+
+    return null;
+  }
+
+  private normalizePositionStatus(value: unknown): "OPEN" | "CLAIMED" | "REFUNDED" | null {
+    if (!value || typeof value !== "object") {
+      return null;
+    }
+
+    if ("open" in value || "Open" in value) {
+      return "OPEN";
+    }
+
+    if ("claimed" in value || "Claimed" in value) {
+      return "CLAIMED";
+    }
+
+    if ("refunded" in value || "Refunded" in value) {
+      return "REFUNDED";
     }
 
     return null;

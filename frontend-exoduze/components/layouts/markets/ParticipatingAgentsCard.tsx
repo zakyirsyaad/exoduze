@@ -12,6 +12,7 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area"
 import type { MarketAgent } from "@/hooks/Type"
 import type { MarketCompetitionEntry } from "@/lib/market-competition"
+import { TopAgentBonusBadge } from "@/components/markets/TopAgentBonusBadge"
 
 import { DecisionRationale } from "./DecisionRationale"
 import {
@@ -85,6 +86,9 @@ export function ParticipatingAgentsCard({
                     </div>
                   </div>
                   <div className="flex flex-wrap gap-2">
+                    {marketAgent.top_bonus_eligible ? (
+                      <TopAgentBonusBadge />
+                    ) : null}
                     <Badge
                       className={`rounded ${getDecisionBadgeClass(
                         marketAgent.current_decision?.side

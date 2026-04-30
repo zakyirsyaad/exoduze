@@ -248,6 +248,22 @@ export class ResolutionFinalizerService {
       );
     }
 
+    const ownedByCurrentProgram =
+      await this.onchainService.isAccountOwnedByCurrentProgram(
+        resolution.onchain_market_pubkey,
+      );
+    if (!ownedByCurrentProgram) {
+      this.logger?.warn?.(
+        {
+          marketPubkey: resolution.onchain_market_pubkey,
+          marketId: resolution.market_id,
+          programId: this.onchainService.programId.toBase58(),
+        },
+        "Skipping on-chain resolve because the market account belongs to a different program.",
+      );
+      return null;
+    }
+
     return this.onchainService.resolveMarket({
       marketPubkey: resolution.onchain_market_pubkey,
       outcome: resolution.proposed_outcome,

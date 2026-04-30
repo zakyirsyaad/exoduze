@@ -82,11 +82,35 @@ export type AgentCategory = {
 
 export type AgentOwner = {
   wallet_address: string
+  is_active?: boolean
 }
 
 export type AgentActivity = {
   active_markets_count: number
 }
+
+export type AgentSpecialization =
+  | "crypto"
+  | "finance"
+  | "sports"
+  | "politics"
+  | "tech"
+  | "general"
+
+export type AgentRiskProfile =
+  | "conservative"
+  | "balanced"
+  | "aggressive"
+
+export type AgentDataFocus =
+  | "price_action"
+  | "news"
+  | "sentiment"
+  | "macro"
+  | "onchain"
+  | "technical"
+
+export type AgentVisibility = "public" | "private"
 
 export type Agent = {
   id: string
@@ -94,9 +118,17 @@ export type Agent = {
   name: string
   description: string
   status: "active" | "inactive"
-  avatar_uri: string
+  avatar_uri: string | null
+  specialization?: AgentSpecialization
+  base_personality?: string
+  base_strategy?: string
+  risk_profile?: AgentRiskProfile
+  data_focus?: AgentDataFocus[]
+  visibility?: AgentVisibility
+  created_at?: string
+  updated_at?: string
 
-  owner: AgentOwner
+  owner: AgentOwner | null
   categories: AgentCategory[]
   activity: AgentActivity
 }
@@ -283,11 +315,25 @@ export type MarketResolution = {
     reason: string | null
     created_at: string | null
   } | null
+  settlement_summary?: {
+    winning_stake_usdc: string
+    losing_stake_usdc: string
+    base_prize_pool_usdc: string
+    top_agent_bonus_pool_usdc: string
+    total_gross_usdc: string
+    total_fee_usdc: string
+    total_net_usdc: string
+    fee_bps: number
+    top_agent_bonus_bps: number
+    top_ranked_market_agent_ids: string[]
+  } | null
 }
 
 export type MarketTransparency = {
   created_by_wallet: string | null
+  created_by_actor?: string | null
   resolver_wallet: string | null
+  resolver_actor?: string | null
   rules: unknown[]
   context: Record<string, unknown>
 }
@@ -391,6 +437,7 @@ export type MarketAgent = {
   commitment: MarketAgentCommitment
   current_decision: MarketAgentDecision | null
   final_decision: MarketAgentFinalDecision | null
+  top_bonus_eligible?: boolean
   stats: MarketAgentStats | null
   market_stats: MarketAgentMarketStats
 }
@@ -445,6 +492,7 @@ export type MarketUserPosition = {
   stake_usdc: string
   status: string
   opened_at: string
+  top_bonus_eligible?: boolean
   position_units?: string | null
   onchain_position_ref?: string | null
   open_tx_sig?: string | null
@@ -456,6 +504,15 @@ export type MarketUserPayout = {
   net_usdc: string
   status: string
   paid_at: string | null
+  top_bonus_eligible?: boolean
+  breakdown?: {
+    stake_return_usdc: string
+    base_pool_winnings_usdc: string
+    top_agent_bonus_usdc: string
+    gross_usdc: string
+    fee_usdc: string
+    net_usdc: string
+  }
   gross_usdc?: string | null
   fee_usdc?: string | null
   payout_tx_sig?: string | null
@@ -473,8 +530,71 @@ export type MarketDetailResponse = {
     agents: MarketAgent[]
     monitoring: MarketMonitoring
     ai_decision_trail: MarketDecisionTrailItem[]
+    battle_pool: BattlePool
+    battle_entries: BattleEntry[]
     user_context: MarketUserContext | null
   }
+}
+
+export type BattleStrategyPreset =
+  | "conservative"
+  | "aggressive"
+  | "momentum"
+  | "mean_reversion"
+  | "news_driven"
+  | "hybrid"
+
+export type BattlePredictionDirection =
+  | "bullish"
+  | "bearish"
+  | "neutral"
+  | "yes"
+  | "no"
+
+export type BattlePredictionJson = {
+  predictedValue: number | string
+  direction: BattlePredictionDirection
+  confidence: number
+  reasoningSummary: string
+  riskNotes: string
+}
+
+export type BattleEntry = {
+  id: string
+  market_agent_id: string | null
+  agent: {
+    id: string
+    slug: string
+    name: string
+    description: string
+    avatar_uri: string | null
+    specialization: string
+    risk_profile: string
+  }
+  strategy: {
+    preset: string
+    technical_weight: number
+    news_weight: number
+    sentiment_weight: number
+    macro_weight: number
+    onchain_weight: number
+    optional_insight: string | null
+  }
+  stake_amount: string
+  prediction_json: BattlePredictionJson
+  prediction_hash: string
+  status: "submitted" | "locked" | "resolved" | "claimed"
+  created_at: string
+}
+
+export type BattlePool = {
+  total_entries: number
+  total_staked_usdc: string
+  pools: Array<{
+    direction: string
+    entry_count: number
+    total_stake_usdc: string
+  }>
 }
 
 export type MarketNewsResponse = {
@@ -521,11 +641,21 @@ export type PortfolioUserParticipant = {
     name: string
     market_agent_id: string
     final_decision_side: string | null
+    top_bonus_eligible?: boolean
   }
   payout: {
     id: string
     status: string | null
     net_usdc: string | null
+    top_bonus_eligible?: boolean
+    breakdown?: {
+      stake_return_usdc: string
+      base_pool_winnings_usdc: string
+      top_agent_bonus_usdc: string
+      gross_usdc: string
+      fee_usdc: string
+      net_usdc: string
+    }
   } | null
 }
 
@@ -538,6 +668,7 @@ export type PortfolioAiBattle = {
   final_decision_at: string | null
   follower_staked_usdc: string
   follower_count: number
+  top_bonus_eligible?: boolean
   agent: {
     id: string
     slug: string
@@ -560,6 +691,15 @@ export type PortfolioPayout = {
   status: string
   paid_at: string | null
   onchain_position_ref: string | null
+  top_bonus_eligible?: boolean
+  breakdown?: {
+    stake_return_usdc: string
+    base_pool_winnings_usdc: string
+    top_agent_bonus_usdc: string
+    gross_usdc: string
+    fee_usdc: string
+    net_usdc: string
+  }
   market: {
     id: string
     slug: string

@@ -2,16 +2,12 @@ import Link from "next/link"
 import { notFound } from "next/navigation"
 
 import { BattleCard } from "@/components/BattleCard"
-import { JoinBattle } from "@/components/JoinBattle"
 import { MarketActivityCard } from "@/components/layouts/markets/MarketActivityCard"
 import CountdownProgress from "@/components/layouts/markets/CountdownProgress"
 import { Curve } from "@/components/layouts/markets/Curve"
 import { DecisionTrailCard } from "@/components/layouts/markets/DecisionTrailCard"
 import { LiveAgentLeaderboard } from "@/components/layouts/markets/LiveAgentLeaderboard"
-import {
-  type AgentJoinAvailability,
-  MarketJoinAvailabilityCard,
-} from "@/components/layouts/markets/MarketJoinAvailabilityCard"
+import { type AgentJoinAvailability } from "@/components/layouts/markets/MarketJoinAvailabilityCard"
 import { MarketLiveSync } from "@/components/layouts/markets/MarketLiveSync"
 import { MarketNewsSection } from "@/components/layouts/markets/MarketNewsSection"
 import { MarketOnchainCard } from "@/components/layouts/markets/MarketOnchainCard"
@@ -26,6 +22,11 @@ import {
   formatStatusLabel,
 } from "@/components/layouts/markets/market-detail-helpers"
 import { ResolutionPanel } from "@/components/markets/ResolutionPanel"
+import { BattlePoolBreakdownCard } from "@/components/markets/BattlePoolBreakdownCard"
+import { MarketJoinBattlePanel } from "@/components/markets/MarketJoinBattlePanel"
+import { BattleTaskCard } from "@/components/markets/BattleTaskCard"
+import { BattleTimeline } from "@/components/markets/BattleTimeline"
+import { PredictionPreview } from "@/components/markets/PredictionPreview"
 import { Badge } from "@/components/ui/badge"
 import { NumberTicker } from "@/components/ui/number-ticker"
 import { Separator } from "@/components/ui/separator"
@@ -140,6 +141,8 @@ export default async function MarketPage({ params }: MarketPageProps) {
   const monitoring = marketDetail.data.monitoring
   const decisionTrail = marketDetail.data.ai_decision_trail
   const marketNews = marketNewsResponse.data
+  const battleEntries = marketDetail.data.battle_entries
+  const battlePool = marketDetail.data.battle_pool
   const liquidityValue = Number(market.settlement.total_liquidity_usdc ?? "0")
   const countdownValue = formatCountdown(market.timing.closes_at)
   const agentJoinAvailability = getAgentJoinAvailability(market)
@@ -185,17 +188,15 @@ export default async function MarketPage({ params }: MarketPageProps) {
               topicLabels={market.topics.map((topic) => topic.name)}
             />
             <div className="space-y-3">
-              <MarketJoinAvailabilityCard
+              <MarketJoinBattlePanel
                 availability={agentJoinAvailability}
+                battleEntries={battleEntries}
+                battlePool={battlePool}
+                marketIdOrSlug={market.slug}
+                marketPubkey={market.onchain.market_pubkey}
+                joinDeadlineAt={market.timing.join_deadline_at}
+                settlementAsset={market.settlement.asset}
               />
-              {agentJoinAvailability.canJoin ? (
-                <JoinBattle
-                  marketIdOrSlug={market.slug}
-                  marketPubkey={market.onchain.market_pubkey}
-                  joinDeadlineAt={market.timing.join_deadline_at}
-                  settlementAsset={market.settlement.asset}
-                />
-              ) : null}
             </div>
             <Separator />
             <Stake
@@ -264,8 +265,20 @@ export default async function MarketPage({ params }: MarketPageProps) {
               }
             />
             <section className="grid grid-cols-3 gap-5">
+              <BattleTaskCard
+                market={market}
+                transparency={market.transparency}
+              />
+              <BattlePoolBreakdownCard
+                pool={battlePool}
+                settlementAsset={market.settlement.asset}
+              />
+              <BattleTimeline status={market.status} timing={market.timing} />
+            </section>
+
+            <section className="grid grid-cols-3 gap-5">
               <MarketTimingCard timing={market.timing} />
-              <ResolutionPanel market={market} />
+              <ResolutionPanel market={market} agents={agents} />
               <MarketOnchainCard
                 onchain={market.onchain}
                 settlement={market.settlement}
@@ -303,6 +316,32 @@ export default async function MarketPage({ params }: MarketPageProps) {
                 settlementAsset={market.settlement.asset}
               />
               <DecisionTrailCard decisionTrail={decisionTrail} />
+            </section>
+
+            <section className="grid gap-5">
+              <div>
+                <p className="text-sm font-medium text-neutral-500 uppercase">
+                  Submitted Predictions
+                </p>
+                <h2 className="mt-2 text-2xl font-semibold">
+                  Locked battle entries
+                </h2>
+              </div>
+              {battleEntries.length ? (
+                <div className="grid gap-4 xl:grid-cols-2">
+                  {battleEntries.map((entry) => (
+                    <PredictionPreview
+                      key={entry.id}
+                      entry={entry}
+                      settlementAsset={market.settlement.asset}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <div className="rounded-2xl border border-dashed border-black/10 p-5 text-sm text-neutral-500 dark:border-white/10 dark:text-neutral-400">
+                  No submitted predictions yet.
+                </div>
+              )}
             </section>
           </div>
         </section>

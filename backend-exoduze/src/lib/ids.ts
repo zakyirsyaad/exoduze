@@ -1,11 +1,28 @@
 import { createHash } from "node:crypto";
 
-export function slugify(value: string): string {
-  return value
+export const MAX_MARKET_SLUG_LENGTH = 96;
+
+export function slugify(
+  value: string,
+  options?: { maxLength?: number | undefined },
+): string {
+  const normalized = value
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .replace(/-{2,}/g, "-");
+
+  const maxLength = options?.maxLength;
+  if (
+    typeof maxLength !== "number" ||
+    !Number.isFinite(maxLength) ||
+    maxLength < 1 ||
+    normalized.length <= Math.trunc(maxLength)
+  ) {
+    return normalized;
+  }
+
+  return normalized.slice(0, Math.trunc(maxLength)).replace(/-+$/g, "");
 }
 
 export function createStableId(prefix: string, input: string): string {

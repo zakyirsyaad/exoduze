@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { assertValidSolanaWalletAddress } from "../modules/auth/solana.js";
 import { AiMarketJoinService } from "../modules/ai/ai-market-join.service.js";
+import { strategyPresets } from "../modules/ai/battle-config.js";
 import { MarketsService } from "../modules/markets/markets.service.js";
 
 const marketStatusSchema = z.enum(["draft", "upcoming", "open", "locked", "closed", "resolving", "disputed", "resolved", "cancelled"]);
@@ -16,10 +17,6 @@ const listMarketsQuerySchema = z.object({
 
 const marketDetailQuerySchema = z.object({
   wallet: z.string().optional()
-});
-
-const marketAgentJoinBodySchema = z.object({
-  user_prompt: z.string().max(8000).nullable().optional()
 });
 
 const positiveDecimalSchema = z
@@ -40,6 +37,62 @@ const positiveIntegerStringSchema = z
 
 const solanaPublicKeySchema = z.string().trim().min(32).max(64);
 const solanaSignatureSchema = z.string().trim().min(32).max(128);
+const strategyPresetSchema = z.enum(strategyPresets);
+const battleWeightSchema = z.coerce.number().int().min(0).max(100);
+
+const marketAgentJoinBodySchema = z
+  .object({
+    user_prompt: z.string().max(8000).nullable().optional(),
+    strategy_preset: strategyPresetSchema.optional(),
+    technical_weight: battleWeightSchema.optional(),
+    news_weight: battleWeightSchema.optional(),
+    sentiment_weight: battleWeightSchema.optional(),
+    macro_weight: battleWeightSchema.optional(),
+    onchain_weight: battleWeightSchema.optional(),
+    optional_insight: z.string().max(280).nullable().optional(),
+    stake_usdc: positiveDecimalSchema.optional(),
+  })
+  .refine(
+    (value) => {
+      const weights = [
+        value.technical_weight,
+        value.news_weight,
+        value.sentiment_weight,
+        value.macro_weight,
+        value.onchain_weight,
+      ];
+      const providedWeights = weights.filter(
+        (weight): weight is number => typeof weight === "number",
+      );
+
+      return providedWeights.length === 0 || providedWeights.length === weights.length;
+    },
+    {
+      message: "All signal weights must be provided together.",
+    },
+  )
+  .refine(
+    (value) => {
+      const weights = [
+        value.technical_weight,
+        value.news_weight,
+        value.sentiment_weight,
+        value.macro_weight,
+        value.onchain_weight,
+      ];
+      const providedWeights = weights.filter(
+        (weight): weight is number => typeof weight === "number",
+      );
+
+      return (
+        providedWeights.length === 0 ||
+        providedWeights.reduce((total, weight) => total + weight, 0) === 100
+      );
+    },
+    {
+      message: "Signal weights must total 100.",
+    },
+  );
 
 const marketAgentStakeBodySchema = z.object({
   commit_included: z.boolean().optional(),
@@ -188,7 +241,15 @@ export async function registerMarketRoutes(
 
     reply.code(201);
     return aiMarketJoinService.joinAndDecide(auth, params.marketIdOrSlug, params.agentIdOrSlug, {
-      userPrompt: body.user_prompt ?? undefined
+      userPrompt: body.user_prompt ?? undefined,
+      strategyPreset: body.strategy_preset,
+      technicalWeight: body.technical_weight,
+      newsWeight: body.news_weight,
+      sentimentWeight: body.sentiment_weight,
+      macroWeight: body.macro_weight,
+      onchainWeight: body.onchain_weight,
+      optionalInsight: body.optional_insight ?? undefined,
+      stakeUsdc: body.stake_usdc,
     });
   });
 

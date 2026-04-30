@@ -62,7 +62,9 @@ export function WalletConnectButton() {
   const [error, setError] = useState<string | null>(null)
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [flowStep, setFlowStep] = useState<WalletFlowStep>("idle")
-  const [activeConnectorId, setActiveConnectorId] = useState<string | null>(null)
+  const [activeConnectorId, setActiveConnectorId] = useState<string | null>(
+    null
+  )
 
   const isConnected = wallet.status === "connected"
   const address = isConnected ? wallet.session.account.address.toString() : null
@@ -82,10 +84,7 @@ export function WalletConnectButton() {
 
   const isFlowActive = flowStep !== "idle"
 
-  const isBusy =
-    walletConnection.connecting ||
-    auth.loading ||
-    isFlowActive
+  const isBusy = walletConnection.connecting || auth.loading || isFlowActive
 
   const availableConnectors = useMemo(
     () => getAvailableConnectors(walletConnection.connectors),
@@ -99,7 +98,8 @@ export function WalletConnectButton() {
 
   const connectStepState: StepState = useMemo(() => {
     if (isConnected) return "done"
-    if (flowStep === "connecting" || walletConnection.connecting) return "active"
+    if (flowStep === "connecting" || walletConnection.connecting)
+      return "active"
     return "idle"
   }, [isConnected, flowStep, walletConnection.connecting])
 
@@ -350,7 +350,8 @@ export function WalletConnectButton() {
               <div className="rounded-md border border-dashed px-3 py-2">
                 <p className="font-medium">No Solana wallet detected</p>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  Install Phantom, Solflare, or Backpack, then refresh this page.
+                  Install Phantom, Solflare, or Backpack, then refresh this
+                  page.
                 </p>
               </div>
             )}
@@ -391,65 +392,39 @@ function ConnectedWalletView({
   onSignIn: () => void
 }) {
   return (
-    <section className="flex flex-wrap items-center justify-end gap-2 text-sm">
-      <div className="flex min-w-0 items-center gap-2 rounded-md border border-border bg-background/80 px-2 py-1">
-        <span
-          className={cn(
-            "size-2 rounded-full",
-            isConnectedAuthenticatedWallet
-              ? "bg-emerald-500"
-              : needsSignature
-                ? "bg-amber-500"
-                : "bg-muted-foreground"
-          )}
-        />
+    <section className="flex items-center gap-3">
+      <div>
+        <div className="flex items-center gap-1">
+          <p className="font-medium">{truncateAddress(address)}</p>
 
-        <div className="grid min-w-0 leading-tight">
-          <span className="font-medium">{truncateAddress(address)}</span>
-          <span className="text-[0.625rem] text-muted-foreground">
-            {getSessionStatusLabel({
-              authLoading,
-              isAuthenticated,
-              isConnected,
-              isConnectedAuthenticatedWallet,
-              needsSignature,
-            })}
-          </span>
+          {isAdmin ? (
+            <Badge variant="secondary" className="rounded">
+              Admin
+            </Badge>
+          ) : null}
         </div>
 
-        {isAdmin ? (
-          <Badge variant="secondary" className="rounded">
-            Admin
-          </Badge>
+        {isConnectedAuthenticatedWallet ? (
+          <div className="grid grid-cols-2">
+            <p className="font-bold">
+              {formatUsdcBalance(usdcBalance)}{" "}
+              <span className="text-sm font-normal">USDC</span>
+            </p>
+            <p className="font-bold">
+              {formatSolBalance(solBalance)}{" "}
+              <span className="text-sm font-normal">SOL</span>
+            </p>
+          </div>
         ) : null}
       </div>
-
-      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-        {isConnectedAuthenticatedWallet ? (
-          <>
-            <p>{formatUsdcBalance(usdcBalance)}</p>
-            <p>{formatSolBalance(solBalance)}</p>
-          </>
-        ) : (
-          <p>
-            {needsSignature
-              ? "Sign message to switch wallet session"
-              : isAuthenticated
-                ? "Reconnect wallet to transact"
-                : isConnected
-                  ? "Wallet connected"
-                  : "Connect wallet"}
-          </p>
-        )}
-      </div>
-
-      <div className="flex items-center gap-2">
+      <div>
         {needsSignature ? (
           <Button
             type="button"
             variant="default"
             disabled={authLoading || flowStep === "signing"}
             onClick={onSignIn}
+            size={"icon-lg"}
           >
             {authLoading || flowStep === "signing"
               ? "Waiting signature..."
@@ -493,7 +468,7 @@ function WalletOptionButton({
       onClick={onConnect}
       variant="outline"
       size="lg"
-      className="h-auto justify-between px-3 py-3"
+      className="h-auto justify-between px-3 py-3 hover:bg-secondary/10"
     >
       <span className="flex items-center gap-2">
         <HugeiconsIcon icon={Wallet01Icon} />
@@ -574,7 +549,7 @@ function formatSolBalance(lamports: bigint | null | undefined) {
 
   return `${sol.toLocaleString("en-US", {
     maximumFractionDigits: 4,
-  })} SOL`
+  })}`
 }
 
 function formatUsdcBalance(value: number | string | null | undefined) {
@@ -585,12 +560,12 @@ function formatUsdcBalance(value: number | string | null | undefined) {
   const numericValue = Number(value)
 
   if (!Number.isFinite(numericValue)) {
-    return `${value} USDC`
+    return `${value}`
   }
 
   return `${numericValue.toLocaleString("en-US", {
     maximumFractionDigits: 4,
-  })} USDC`
+  })}`
 }
 
 function getConnectorLabel(connectorId: string, fallback: string) {

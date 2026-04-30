@@ -1,3 +1,5 @@
+import type { ReactNode } from "react"
+
 import {
   Card,
   CardContent,
@@ -8,9 +10,9 @@ import {
 import type { MarketTransparency } from "@/hooks/Type"
 
 import {
+  formatActorIdentity,
   formatContextValue,
   formatTextLabel,
-  formatWallet,
 } from "./market-detail-helpers"
 
 type MarketTransparencyCardProps = {
@@ -31,14 +33,20 @@ export function MarketTransparencyCard({
       <CardContent className="grid gap-4 text-sm">
         <div>
           <p className="text-neutral-500">Created By</p>
-          <p className="mt-1 font-mono text-xs">
-            {formatWallet(transparency.created_by_wallet)}
+          <p className="mt-1 text-xs">
+            {formatActorIdentity({
+              actor: transparency.created_by_actor,
+              wallet: transparency.created_by_wallet,
+            })}
           </p>
         </div>
         <div>
           <p className="text-neutral-500">Resolver</p>
-          <p className="mt-1 font-mono text-xs">
-            {formatWallet(transparency.resolver_wallet)}
+          <p className="mt-1 text-xs">
+            {formatActorIdentity({
+              actor: transparency.resolver_actor,
+              wallet: transparency.resolver_wallet,
+            })}
           </p>
         </div>
         <div>
@@ -68,9 +76,7 @@ export function MarketTransparencyCard({
                   className="rounded border border-black/10 px-3 py-2 dark:border-white/10"
                 >
                   <p className="font-medium">{formatTextLabel(key)}</p>
-                  <p className="mt-1 text-neutral-500">
-                    {formatContextValue(value)}
-                  </p>
+                  {renderContextValue(value, key)}
                 </div>
               ))}
             </div>
@@ -81,4 +87,102 @@ export function MarketTransparencyCard({
       </CardContent>
     </Card>
   )
+}
+
+function renderContextValue(value: unknown, path: string): ReactNode {
+  if (
+    value === null ||
+    value === undefined ||
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return (
+      <p className="mt-1 break-words text-neutral-500">
+        {formatContextValue(value)}
+      </p>
+    )
+  }
+
+  if (Array.isArray(value)) {
+    if (!value.length) {
+      return <p className="mt-1 text-neutral-500">[]</p>
+    }
+
+    return (
+      <div className="mt-2 grid gap-2">
+        {value.map((item, index) => (
+          <div
+            key={`${path}-${index}`}
+            className="rounded border border-black/10 bg-black/[0.02] px-3 py-2 dark:border-white/10 dark:bg-white/5"
+          >
+            {renderNestedValue(item, `${path}-${index}`)}
+          </div>
+        ))}
+      </div>
+    )
+  }
+
+  if (isRecord(value)) {
+    const entries = Object.entries(value)
+
+    if (!entries.length) {
+      return <p className="mt-1 text-neutral-500">{"{}"}</p>
+    }
+
+    return (
+      <div className="mt-2 grid gap-2">
+        {entries.map(([key, nestedValue]) => (
+          <div
+            key={`${path}-${key}`}
+            className="rounded border border-black/10 bg-black/[0.02] px-3 py-2 dark:border-white/10 dark:bg-white/5"
+          >
+            <p className="font-medium">{formatTextLabel(key)}</p>
+            {renderNestedValue(nestedValue, `${path}-${key}`)}
+          </div>
+        ))}
+      </div>
+    )
+  }
+
+  return (
+    <p className="mt-1 break-words text-neutral-500">
+      {formatContextValue(value)}
+    </p>
+  )
+}
+
+function renderNestedValue(value: unknown, path: string) {
+  if (isRecord(value)) {
+    const entries = Object.entries(value)
+
+    if (!entries.length) {
+      return <p className="mt-1 text-neutral-500">{"{}"}</p>
+    }
+
+    return (
+      <div className="grid gap-2">
+        {entries.map(([key, nestedValue]) => (
+          <div key={`${path}-${key}`}>
+            <p className="font-medium">{formatTextLabel(key)}</p>
+            {renderContextValue(nestedValue, `${path}-${key}`)}
+          </div>
+        ))}
+      </div>
+    )
+  }
+
+  if (Array.isArray(value)) {
+    return renderContextValue(value, path)
+  }
+
+  return (
+    <p className="mt-1 break-words text-neutral-500">
+      {formatContextValue(value)}
+    </p>
+  )
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
 }

@@ -97,10 +97,11 @@ export class AutonomousMarketRunner {
     if (this.env.MARKET_GENERATION_ENABLED) {
       for (const category of categories) {
         try {
-          const snapshot = await this.topicSnapshotsService.saveLatestHotTopicSnapshot(
-            category,
-            this.env.AUTONOMOUS_SNAPSHOT_TOPIC_LIMIT,
-          );
+          const snapshot =
+            await this.topicSnapshotsService.saveLatestHotTopicSnapshot(
+              category,
+              this.env.AUTONOMOUS_SNAPSHOT_TOPIC_LIMIT,
+            );
           if (!snapshot) {
             this.logger?.warn?.(
               { category },
@@ -110,19 +111,30 @@ export class AutonomousMarketRunner {
           }
           snapshotsCreated += 1;
 
-          const generated = await this.marketGeneratorService.createMarketsFromSnapshot({
-            snapshot,
-            opensAt: now.toISOString(),
-            requiredRank: this.env.AUTONOMOUS_MARKET_REQUIRED_RANK,
-            createdBy: "ai_generator",
-            generatedReason: `Autonomous runner generated this market from topic snapshot ${snapshot.id}.`,
-            maxMarkets: this.env.AUTONOMOUS_MARKET_MAX_MARKETS_PER_CATEGORY,
-            minConfidence: this.env.AUTONOMOUS_MARKET_MIN_TOPIC_CONFIDENCE,
-            skipIfActiveMarketExists: true,
-          });
+          const generated =
+            await this.marketGeneratorService.createMarketsFromSnapshot({
+              snapshot,
+              opensAt: now.toISOString(),
+              requiredRank: this.env.AUTONOMOUS_MARKET_REQUIRED_RANK,
+              createdBy: "ai_generator",
+              generatedReason: `Autonomous runner generated this market from topic snapshot ${snapshot.id}.`,
+              maxMarkets: this.env.AUTONOMOUS_MARKET_MAX_MARKETS_PER_CATEGORY,
+              minConfidence: this.env.AUTONOMOUS_MARKET_MIN_TOPIC_CONFIDENCE,
+              skipIfActiveMarketExists: true,
+            });
 
           marketsCreated += generated.marketsCreated;
           marketsSkipped += generated.skipped;
+          if (generated.skippedTopics.length > 0) {
+            this.logger?.info?.(
+              {
+                category,
+                snapshot_id: snapshot.id,
+                skipped_topics: generated.skippedTopics,
+              },
+              "Autonomous market runner skipped one or more topic candidates.",
+            );
+          }
         } catch (error) {
           if (
             error instanceof HttpError &&
@@ -159,7 +171,8 @@ export class AutonomousMarketRunner {
     }
 
     const resolved = await this.oracleResolverService.resolveMarkets(now);
-    const finalized = await this.resolutionFinalizerService.finalizeResolutions(now);
+    const finalized =
+      await this.resolutionFinalizerService.finalizeResolutions(now);
 
     this.logger?.info?.(
       {
@@ -206,6 +219,14 @@ export class AutonomousMarketRunner {
         WHERE onchain_market_pubkey IS NULL
           AND final_outcome IS NULL
           AND status NOT IN ('draft', 'resolved', 'cancelled')
+          AND (
+            COALESCE(resolution_source, '') <> 'topic_snapshots'
+            OR EXISTS (
+              SELECT 1
+              FROM news_item_markets nim
+              WHERE nim.market_id = markets.id
+            )
+          )
         ORDER BY created_at ASC
         LIMIT $1
       `,
@@ -215,10 +236,12 @@ export class AutonomousMarketRunner {
 }
 
 function parseCategoryList(value: string) {
-  return [...new Set(
-    value
-      .split(",")
-      .map((item) => item.trim().toLowerCase())
-      .filter(Boolean),
-  )];
+  return [
+    ...new Set(
+      value
+        .split(",")
+        .map((item) => item.trim().toLowerCase())
+        .filter(Boolean),
+    ),
+  ];
 }

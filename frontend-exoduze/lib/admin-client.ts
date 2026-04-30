@@ -22,9 +22,12 @@ import type {
   CronRunResult,
   MarketMutationInput,
   MarketResolveInput,
+  OnchainConfigResponse,
   OwnerAgentsResponse,
   TopicMutationInput,
   TopicMutationResponse,
+  UpdateTreasuryAuthorityInput,
+  UpdateTreasuryAuthorityResponse,
   UploadAgentAvatarResponse,
 } from "@/lib/admin-types"
 
@@ -391,6 +394,22 @@ export function runCronJob(
     },
     body: JSON.stringify(body),
   })
+}
+
+export function fetchOnchainConfig() {
+  return apiFetch<OnchainConfigResponse>("/v1/admin/system/onchain-config", {
+    method: "GET",
+  })
+}
+
+export function updateTreasuryAuthority(input: UpdateTreasuryAuthorityInput) {
+  return apiFetch<UpdateTreasuryAuthorityResponse>(
+    "/v1/admin/system/treasury-authority",
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    }
+  )
 }
 
 function buildQuery(

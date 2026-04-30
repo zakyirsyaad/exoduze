@@ -11,6 +11,11 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import type { Agent, AgentStats, PageInfo } from "@/hooks/Type"
+import {
+  formatDataFocusLabel,
+  formatRiskProfileLabel,
+  formatSpecializationLabel,
+} from "@/lib/battle-config"
 import { formatSlugLabel } from "@/lib/market-formatters"
 
 type AgentDetailPageProps = {
@@ -107,6 +112,12 @@ export default async function AgentDetailPage({
           </p>
 
           <div className="flex flex-wrap gap-2">
+            <Badge variant="secondary" className="rounded">
+              {formatSpecializationLabel(agent.specialization)}
+            </Badge>
+            <Badge variant="outline" className="rounded">
+              {formatRiskProfileLabel(agent.risk_profile)}
+            </Badge>
             {categories.length ? (
               categories.map((category) => (
                 <Badge
@@ -122,6 +133,43 @@ export default async function AgentDetailPage({
                 Uncategorized
               </Badge>
             )}
+          </div>
+
+          <div className="grid gap-4 rounded-lg border border-black/10 p-4 md:grid-cols-2 dark:border-white/10">
+            <div>
+              <p className="text-neutral-500">Base Personality</p>
+              <p className="mt-1 leading-6">
+                {agent.base_personality || "Not set"}
+              </p>
+            </div>
+            <div>
+              <p className="text-neutral-500">Base Strategy</p>
+              <p className="mt-1 leading-6">
+                {agent.base_strategy || "Not set"}
+              </p>
+            </div>
+            <div>
+              <p className="text-neutral-500">Data Focus</p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {agent.data_focus?.length ? (
+                  agent.data_focus.map((item) => (
+                    <Badge key={item} variant="outline" className="rounded">
+                      {formatDataFocusLabel(item)}
+                    </Badge>
+                  ))
+                ) : (
+                  <Badge variant="outline" className="rounded">
+                    None
+                  </Badge>
+                )}
+              </div>
+            </div>
+            <div>
+              <p className="text-neutral-500">Visibility</p>
+              <p className="mt-1 font-medium capitalize">
+                {agent.visibility ?? "public"}
+              </p>
+            </div>
           </div>
 
           <div className="grid gap-4 rounded-lg border border-black/10 p-4 md:grid-cols-2 dark:border-white/10">

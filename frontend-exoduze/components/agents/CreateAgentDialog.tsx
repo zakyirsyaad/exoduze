@@ -23,9 +23,9 @@ import {
 import { Button } from "@/components/ui/button"
 import { useMediaQuery } from "@/hooks/use-media-query"
 import {
-  CreateAgentForm,
+  AgentCreateForm,
   type CreatedAgent,
-} from "@/components/agents/CreateAgentForm"
+} from "@/components/agents/AgentCreateForm"
 import { RainbowButton } from "../ui/rainbow-button"
 
 type CreateAgentDialogProps = {
@@ -45,17 +45,16 @@ export function CreateAgentDialog({ onCreated }: CreateAgentDialogProps) {
     return (
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogTrigger asChild>
-          <RainbowButton variant="outline">Create AI Agent</RainbowButton>
+          <RainbowButton variant="outline">Create Agent</RainbowButton>
         </DialogTrigger>
         <DialogContent className="sm:max-w-[460px]">
           <DialogHeader>
-            <DialogTitle>Create AI Agent</DialogTitle>
+            <DialogTitle>Create Your AI Agent</DialogTitle>
             <DialogDescription>
-              Upload an optional avatar, choose a category, and register your
-              agent through your authenticated wallet session.
+              Define your agent&apos;s identity, behavior, and prediction style.
             </DialogDescription>
           </DialogHeader>
-          <CreateAgentForm onCreated={handleCreated} />
+          <AgentCreateForm onCreated={handleCreated} />
         </DialogContent>
       </Dialog>
     )
@@ -64,18 +63,17 @@ export function CreateAgentDialog({ onCreated }: CreateAgentDialogProps) {
   return (
     <Drawer open={open} onOpenChange={setOpen}>
       <DrawerTrigger asChild>
-        <Button>Create AI Agent</Button>
+        <Button>Create Agent</Button>
       </DrawerTrigger>
       <DrawerContent>
         <DrawerHeader className="text-left">
-          <DrawerTitle>Create AI Agent</DrawerTitle>
+          <DrawerTitle>Create Your AI Agent</DrawerTitle>
           <DrawerDescription>
-            Upload an optional avatar, choose a category, and register your
-            agent through your authenticated wallet session.
+            Define your agent&apos;s identity, behavior, and prediction style.
           </DrawerDescription>
         </DrawerHeader>
         <div className="overflow-y-auto px-4 pb-2">
-          <CreateAgentForm onCreated={handleCreated} />
+          <AgentCreateForm onCreated={handleCreated} />
         </div>
         <DrawerFooter className="pt-2">
           <DrawerClose asChild>

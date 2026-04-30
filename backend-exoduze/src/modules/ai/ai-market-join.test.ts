@@ -72,3 +72,37 @@ test("stake signature resolution falls back to the commitment account when neede
 
   assert.equal(resolved, COMMITMENT_SIG);
 });
+
+test("stake sync records the cumulative on-chain position amount", async () => {
+  const result = await (AiMarketJoinService.prototype as any).assertStakeSyncReady.call(
+    {
+      onchainService: {},
+      formatStakeBaseUnits: (AiMarketJoinService.prototype as any).formatStakeBaseUnits,
+      getVerifiedOnchainPosition: async () => ({
+        agent_commitment: COMMITMENT_REF,
+        claimed_amount_base_units: "0",
+        market: "market-ref",
+        side: "YES",
+        stake_amount_base_units: "15000000",
+        status: "OPEN",
+        user: "wallet-ref"
+      })
+    },
+    {
+      actorWalletAddress: "wallet-ref",
+      expectedDecisionSide: "YES",
+      marketOnchainPubkey: "market-ref",
+      onchainCommitmentRef: COMMITMENT_REF,
+      onchainPositionRef: POSITION_REF,
+      requireCommitmentAccount: true,
+      submittedStakeAmountBaseUnits: "5000000",
+      submittedStakeUsdc: "5",
+      txSig: PROVIDED_SIG
+    }
+  );
+
+  assert.deepEqual(result, {
+    stakeAmountBaseUnits: "15000000",
+    stakeUsdc: "15"
+  });
+});

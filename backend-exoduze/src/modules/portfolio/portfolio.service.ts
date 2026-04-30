@@ -4,6 +4,11 @@ import type { Env } from "../../config/env.js";
 import type { AppDatabase } from "../../db/database.js";
 import { queryOne, queryRows } from "../../db/query.js";
 import { HttpError } from "../../lib/http-error.js";
+import {
+  buildHybridPayoutBreakdownByPositionKey,
+  formatSettlementDecimalUnits,
+  getTopRankedWinningMarketAgentIds,
+} from "../markets/markets.service.js";
 import type { ExoduzeOnchainService } from "../onchain/exoduze-onchain.service.js";
 import { effectiveMarketStatusSql } from "../markets/market-status.js";
 
@@ -94,6 +99,19 @@ export class PortfolioService {
       this.listAiBattles(wallet.id),
       this.listPayouts(wallet.id),
     ]);
+    const topBonusEligibleMarketAgentIds =
+      await this.getTopBonusEligibleMarketAgentIds([
+        ...userParticipants.map((item) => item.market.id),
+        ...aiBattles.map((item) => item.market.id),
+        ...payouts.map((item) => item.market.id),
+      ]);
+    const payoutBreakdownByPositionKey = await this.getPayoutBreakdownByPositionKey(
+      wallet.id,
+      [
+        ...userParticipants.map((item) => item.market.id),
+        ...payouts.map((item) => item.market.id),
+      ],
+    );
 
     return {
       data: {
@@ -102,9 +120,41 @@ export class PortfolioService {
           wallet_address: wallet.wallet_address,
         },
         balances,
-        user_participants: userParticipants,
-        ai_battles: aiBattles,
-        payouts,
+        user_participants: userParticipants.map((item) => ({
+          ...item,
+          agent: {
+            ...item.agent,
+            top_bonus_eligible: topBonusEligibleMarketAgentIds.has(
+              item.agent.market_agent_id,
+            ),
+          },
+          payout: item.payout
+            ? {
+                ...item.payout,
+                top_bonus_eligible: topBonusEligibleMarketAgentIds.has(
+                  item.agent.market_agent_id,
+                ),
+                breakdown: payoutBreakdownByPositionKey.get(
+                  `${wallet.id}:${item.agent.market_agent_id}`,
+                ),
+              }
+            : null,
+        })),
+        ai_battles: aiBattles.map((item) => ({
+          ...item,
+          top_bonus_eligible: topBonusEligibleMarketAgentIds.has(
+            item.market_agent_id,
+          ),
+        })),
+        payouts: payouts.map((item) => ({
+          ...item,
+          top_bonus_eligible: topBonusEligibleMarketAgentIds.has(
+            item.agent.market_agent_id,
+          ),
+          breakdown: payoutBreakdownByPositionKey.get(
+            `${wallet.id}:${item.agent.market_agent_id}`,
+          ),
+        })),
       },
     };
   }
@@ -428,6 +478,268 @@ export class PortfolioService {
     }));
   }
 
+  private async getTopBonusEligibleMarketAgentIds(marketIds: string[]) {
+    if (this.env.PAYOUT_TOP_AGENT_BONUS_BPS <= 0) {
+      return new Set<string>();
+    }
+
+    const uniqueMarketIds = [...new Set(marketIds.filter(Boolean))];
+    if (uniqueMarketIds.length === 0) {
+      return new Set<string>();
+    }
+
+    const marketOutcomeRows = await queryRows<{
+      market_id: string;
+      final_outcome: string | null;
+    }>(
+      this.db,
+      `
+        SELECT
+          m.id AS market_id,
+          COALESCE(confirmed_result.outcome, m.final_outcome) AS final_outcome
+        FROM markets m
+        LEFT JOIN LATERAL (
+          SELECT outcome
+          FROM oracle_results
+          WHERE market_id = m.id AND status = 'confirmed'
+          ORDER BY resolved_at DESC NULLS LAST, created_at DESC
+          LIMIT 1
+        ) confirmed_result ON true
+        WHERE m.id = ANY($1::text[])
+      `,
+      [uniqueMarketIds],
+    );
+    const agentRows = await queryRows<{
+      market_id: string;
+      market_agent_id: string;
+      final_decision_side: string | null;
+      decision_confidence: number | null;
+    }>(
+      this.db,
+      `
+        SELECT
+          ma.market_id,
+          ma.id AS market_agent_id,
+          ma.final_decision_side,
+          COALESCE(final_decision.confidence, latest_decision.confidence) AS decision_confidence
+        FROM market_agents ma
+        LEFT JOIN agent_market_decisions final_decision
+          ON final_decision.id = ma.finalized_from_decision_id
+        LEFT JOIN LATERAL (
+          SELECT d.confidence
+          FROM agent_market_decisions d
+          WHERE d.market_agent_id = ma.id
+          ORDER BY d.sequence_no DESC, d.decided_at DESC
+          LIMIT 1
+        ) latest_decision ON final_decision.id IS NULL
+        WHERE ma.market_id = ANY($1::text[])
+      `,
+      [uniqueMarketIds],
+    );
+
+    const agentRowsByMarketId = new Map<
+      string,
+      Array<{
+        market_agent_id: string;
+        final_decision_side: string | null;
+        decision_confidence: number | null;
+      }>
+    >();
+    for (const row of agentRows) {
+      const entries = agentRowsByMarketId.get(row.market_id) ?? [];
+      entries.push({
+        market_agent_id: row.market_agent_id,
+        final_decision_side: row.final_decision_side,
+        decision_confidence: row.decision_confidence,
+      });
+      agentRowsByMarketId.set(row.market_id, entries);
+    }
+
+    const eligibleMarketAgentIds = new Set<string>();
+    for (const row of marketOutcomeRows) {
+      if (!isMarketOutcome(row.final_outcome)) {
+        continue;
+      }
+
+      const marketAgentIds = getTopRankedWinningMarketAgentIds(
+        agentRowsByMarketId.get(row.market_id) ?? [],
+        row.final_outcome,
+      );
+      for (const marketAgentId of marketAgentIds) {
+        eligibleMarketAgentIds.add(marketAgentId);
+      }
+    }
+
+    return eligibleMarketAgentIds;
+  }
+
+  private async getPayoutBreakdownByPositionKey(
+    walletIdentityId: string,
+    marketIds: string[],
+  ) {
+    const uniqueMarketIds = [...new Set(marketIds.filter(Boolean))];
+    if (uniqueMarketIds.length === 0) {
+      return new Map<
+        string,
+        {
+          stake_return_usdc: string;
+          base_pool_winnings_usdc: string;
+          top_agent_bonus_usdc: string;
+          gross_usdc: string;
+          fee_usdc: string;
+          net_usdc: string;
+        }
+      >();
+    }
+
+    const marketOutcomeRows = await queryRows<{
+      market_id: string;
+      final_outcome: string | null;
+    }>(
+      this.db,
+      `
+        SELECT
+          m.id AS market_id,
+          COALESCE(confirmed_result.outcome, m.final_outcome) AS final_outcome
+        FROM markets m
+        LEFT JOIN LATERAL (
+          SELECT outcome
+          FROM oracle_results
+          WHERE market_id = m.id AND status = 'confirmed'
+          ORDER BY resolved_at DESC NULLS LAST, created_at DESC
+          LIMIT 1
+        ) confirmed_result ON true
+        WHERE m.id = ANY($1::text[])
+      `,
+      [uniqueMarketIds],
+    );
+    const positionRows = await queryRows<{
+      market_id: string;
+      wallet_identity_id: string;
+      market_agent_id: string;
+      final_decision_side: string | null;
+      decision_confidence: number | null;
+      decision_recorded_at: string | null;
+      stake_usdc: string;
+      position_count: number;
+    }>(
+      this.db,
+      `
+        SELECT
+          up.market_id,
+          up.wallet_identity_id,
+          up.market_agent_id,
+          ma.final_decision_side,
+          COALESCE(final_decision.confidence, latest_decision.confidence) AS decision_confidence,
+          COALESCE(final_decision.decided_at, latest_decision.decided_at)::text AS decision_recorded_at,
+          SUM(up.stake_usdc)::text AS stake_usdc,
+          COUNT(*)::integer AS position_count
+        FROM user_positions up
+        JOIN market_agents ma ON ma.id = up.market_agent_id
+        LEFT JOIN agent_market_decisions final_decision
+          ON final_decision.id = ma.finalized_from_decision_id
+        LEFT JOIN LATERAL (
+          SELECT d.confidence, d.decided_at
+          FROM agent_market_decisions d
+          WHERE d.market_agent_id = ma.id
+          ORDER BY d.sequence_no DESC, d.decided_at DESC
+          LIMIT 1
+        ) latest_decision ON final_decision.id IS NULL
+        WHERE up.market_id = ANY($1::text[])
+          AND up.status IN ('open', 'settled')
+        GROUP BY
+          up.market_id,
+          up.wallet_identity_id,
+          up.market_agent_id,
+          ma.final_decision_side,
+          COALESCE(final_decision.confidence, latest_decision.confidence),
+          COALESCE(final_decision.decided_at, latest_decision.decided_at)
+      `,
+      [uniqueMarketIds],
+    );
+    const positionsByMarketId = new Map<
+      string,
+      Array<{
+        payout_key: string;
+        wallet_identity_id: string;
+        market_agent_id: string;
+        final_decision_side: string | null;
+        decision_confidence: number | null;
+        decision_recorded_at: string | null;
+        stakeUnits: bigint;
+        position_count: number;
+      }>
+    >();
+
+    for (const row of positionRows) {
+      const entries = positionsByMarketId.get(row.market_id) ?? [];
+      entries.push({
+        payout_key: `${row.wallet_identity_id}:${row.market_agent_id}`,
+        wallet_identity_id: row.wallet_identity_id,
+        market_agent_id: row.market_agent_id,
+        final_decision_side: row.final_decision_side,
+        decision_confidence: row.decision_confidence,
+        decision_recorded_at: row.decision_recorded_at,
+        stakeUnits: this.parseTokenUnits(row.stake_usdc, 12),
+        position_count: Number(row.position_count),
+      });
+      positionsByMarketId.set(row.market_id, entries);
+    }
+
+    const breakdownByPositionKey = new Map<
+      string,
+      {
+        stake_return_usdc: string;
+        base_pool_winnings_usdc: string;
+        top_agent_bonus_usdc: string;
+        gross_usdc: string;
+        fee_usdc: string;
+        net_usdc: string;
+      }
+    >();
+
+    for (const row of marketOutcomeRows) {
+      if (!isMarketOutcome(row.final_outcome)) {
+        continue;
+      }
+
+      const positions = positionsByMarketId.get(row.market_id) ?? [];
+      if (positions.length === 0) {
+        continue;
+      }
+
+      const payoutPlan = buildHybridPayoutBreakdownByPositionKey({
+        positions,
+        outcome: row.final_outcome,
+        topAgentBonusBps: this.env.PAYOUT_TOP_AGENT_BONUS_BPS,
+        payoutFeeBps: this.env.PAYOUT_FEE_BPS,
+      });
+
+      for (const [positionKey, breakdown] of payoutPlan.breakdownByPositionKey) {
+        if (!positionKey.startsWith(`${walletIdentityId}:`)) {
+          continue;
+        }
+
+        breakdownByPositionKey.set(positionKey, {
+          stake_return_usdc: formatSettlementDecimalUnits(
+            breakdown.principal_units,
+          ),
+          base_pool_winnings_usdc: formatSettlementDecimalUnits(
+            breakdown.base_pool_winnings_units,
+          ),
+          top_agent_bonus_usdc: formatSettlementDecimalUnits(
+            breakdown.top_agent_bonus_units,
+          ),
+          gross_usdc: formatSettlementDecimalUnits(breakdown.gross_units),
+          fee_usdc: formatSettlementDecimalUnits(breakdown.fee_units),
+          net_usdc: formatSettlementDecimalUnits(breakdown.net_units),
+        });
+      }
+    }
+
+    return breakdownByPositionKey;
+  }
+
   private formatTokenUnits(value: bigint, decimals: number) {
     if (decimals <= 0) {
       return value.toString();
@@ -444,4 +756,21 @@ export class PortfolioService {
       ? `${wholePart.toString()}.${fractionalPart}`
       : wholePart.toString();
   }
+
+  private parseTokenUnits(value: string, decimals: number) {
+    const normalized = value.trim();
+    const parts = normalized.split(".");
+    const wholePart = parts[0] ?? "0";
+    const fractionalPart = parts[1] ?? "";
+    const scale = 10n ** BigInt(decimals);
+
+    return (
+      BigInt(wholePart) * scale +
+      BigInt(fractionalPart.padEnd(decimals, "0"))
+    );
+  }
+}
+
+function isMarketOutcome(value: string | null | undefined): value is "YES" | "NO" {
+  return value === "YES" || value === "NO";
 }

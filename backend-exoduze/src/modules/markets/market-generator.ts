@@ -3,9 +3,18 @@ import type { PoolClient, QueryResultRow } from "pg";
 
 import type { AppDatabase } from "../../db/database.js";
 import { queryOne, queryRows } from "../../db/query.js";
-import { createStableId, slugify } from "../../lib/ids.js";
+import {
+  createStableId,
+  MAX_MARKET_SLUG_LENGTH,
+  slugify,
+} from "../../lib/ids.js";
 import { HttpError } from "../../lib/http-error.js";
 import { buildConfiguredJoinDeadlineAt } from "./market-join-window.js";
+import {
+  buildFallbackMarketCopy,
+  MarketDetailGenerator,
+  type TopicNewsContextItem,
+} from "./market-detail-generator.js";
 import type {
   SnapshotTopic,
   TopicSnapshotRecord,
@@ -20,6 +29,7 @@ export type MarketDraft = {
   title: string;
   shortDescription: string;
   description: string;
+  resolutionCriteria: string[];
   category: string;
   topic: SnapshotTopic;
   cutoffAt: string;
@@ -28,6 +38,11 @@ export type MarketDraft = {
   resolutionSource: "topic_snapshots";
   createdBy: MarketCreatedBy;
   generatedReason: string;
+  newsContext: TopicNewsContextItem[];
+  newsHook: string | null;
+  copyProvider: "openai" | "fallback";
+  copyModel: string;
+  usedCopyFallback: boolean;
 };
 
 export type GenerateMarketDraftsInput = {
@@ -40,6 +55,7 @@ export type GenerateMarketDraftsInput = {
   existingSlugs?: Set<string> | undefined;
   minConfidence?: number | undefined;
   maxMarkets?: number | undefined;
+  newsByTopicSlug?: ReadonlyMap<string, TopicNewsContextItem[]> | undefined;
 };
 
 export type CreateMarketsFromSnapshotInput = {
@@ -51,6 +67,35 @@ export type CreateMarketsFromSnapshotInput = {
   maxMarkets?: number | undefined;
   minConfidence?: number | undefined;
   skipIfActiveMarketExists?: boolean | undefined;
+};
+
+export type CreatedSnapshotMarket = {
+  id: string;
+  slug: string;
+  title: string;
+};
+
+export type SkippedSnapshotMarketReason =
+  | "topic_ineligible"
+  | "missing_linked_news"
+  | "empty_generated_slug"
+  | "duplicate_batch_slug"
+  | "existing_slug"
+  | "active_market_exists"
+  | "duplicate_market";
+
+export type SkippedSnapshotMarket = {
+  topicSlug: string;
+  topicName: string;
+  reason: SkippedSnapshotMarketReason;
+  detail?: string | null | undefined;
+};
+
+export type CreateMarketsFromSnapshotResult = {
+  marketsCreated: number;
+  skipped: number;
+  markets: CreatedSnapshotMarket[];
+  skippedTopics: SkippedSnapshotMarket[];
 };
 
 type CategoryRow = QueryResultRow & {
@@ -69,6 +114,25 @@ type ExistingSlugRow = QueryResultRow & {
   slug: string;
 };
 
+export type TopicNewsCandidate = {
+  id: string;
+  title: string;
+  summary: string | null;
+  url: string;
+  source_name: string;
+  published_at: string;
+  is_breaking: boolean;
+  relevance_score: number | string;
+  is_primary: boolean;
+};
+
+type TopicNewsRow = QueryResultRow & TopicNewsCandidate;
+
+type TopicKeywordRef = {
+  name: string;
+  slug: string;
+};
+
 const DEFAULT_REQUIRED_RANK = 3;
 const DEFAULT_MIN_CONFIDENCE = 0.35;
 const DEFAULT_MAX_MARKETS = 3;
@@ -77,30 +141,123 @@ const AUTOMATIC_MARKET_DURATION_MS =
   AUTOMATIC_MARKET_DURATION_HOURS * 60 * 60_000;
 
 export class MarketGeneratorService {
+  private readonly marketDetailGenerator: MarketDetailGenerator;
+
   constructor(
     private readonly db: AppDatabase,
     private readonly env: Env,
-  ) {}
+  ) {
+    this.marketDetailGenerator = new MarketDetailGenerator(env);
+  }
 
-  async createMarketsFromSnapshot(input: CreateMarketsFromSnapshotInput) {
-    const drafts = generateMarketDrafts({
-      category: input.snapshot.category,
-      topics: input.snapshot.topics,
-      opensAt: input.opensAt,
-      requiredRank: input.requiredRank,
-      createdBy: input.createdBy ?? "ai_generator",
-      generatedReason:
-        input.generatedReason ??
-        `Generated from topic snapshot ${input.snapshot.id}.`,
-      minConfidence: input.minConfidence,
-      maxMarkets: input.maxMarkets,
-    });
+  async createMarketsFromSnapshot(
+    input: CreateMarketsFromSnapshotInput,
+  ): Promise<CreateMarketsFromSnapshotResult> {
+    const categorySlug = normalizeSlug(input.snapshot.category, "category");
+    const categoryLabel = toTitleLabel(categorySlug);
+    const opensAt = normalizeIsoDate(input.opensAt ?? new Date().toISOString());
+    const cutoffAt = buildAutomaticCutoffAt(opensAt);
+    const requiredRank = input.requiredRank ?? DEFAULT_REQUIRED_RANK;
+    if (!Number.isInteger(requiredRank) || requiredRank < 1) {
+      throw new HttpError(
+        400,
+        "INVALID_REQUIRED_RANK",
+        "required_rank must be greater than or equal to 1.",
+      );
+    }
+
+    const maxMarkets = input.maxMarkets ?? DEFAULT_MAX_MARKETS;
+    const minConfidence = input.minConfidence ?? DEFAULT_MIN_CONFIDENCE;
+    const generatedReason =
+      input.generatedReason ??
+      `Generated from topic snapshot ${input.snapshot.id}.`;
+    const drafts: MarketDraft[] = [];
+    const batchSlugs = new Set<string>();
+    const skippedTopics: SkippedSnapshotMarket[] = [];
+
+    for (const topic of input.snapshot.topics) {
+      if (drafts.length >= maxMarkets) {
+        break;
+      }
+
+      if (!isTopicEligible(topic, minConfidence)) {
+        skippedTopics.push({
+          topicSlug: topic.slug,
+          topicName: topic.name,
+          reason: "topic_ineligible",
+        });
+        continue;
+      }
+
+      const newsContext = await this.getTopicNewsContext(categorySlug, topic);
+      if (newsContext.length === 0) {
+        skippedTopics.push({
+          topicSlug: topic.slug,
+          topicName: topic.name,
+          reason: "missing_linked_news",
+        });
+        continue;
+      }
+
+      const generatedCopy = await this.marketDetailGenerator.generate({
+        topicName: topic.name,
+        categoryName: categoryLabel,
+        requiredRank,
+        cutoffAt,
+        news: newsContext,
+      });
+      const slug = slugify(generatedCopy.copy.title, {
+        maxLength: MAX_MARKET_SLUG_LENGTH,
+      });
+      if (!slug) {
+        skippedTopics.push({
+          topicSlug: topic.slug,
+          topicName: topic.name,
+          reason: "empty_generated_slug",
+          detail: generatedCopy.copy.title,
+        });
+        continue;
+      }
+
+      if (batchSlugs.has(slug)) {
+        skippedTopics.push({
+          topicSlug: topic.slug,
+          topicName: topic.name,
+          reason: "duplicate_batch_slug",
+          detail: slug,
+        });
+        continue;
+      }
+
+      drafts.push({
+        slug,
+        title: generatedCopy.copy.title,
+        shortDescription: generatedCopy.copy.shortDescription,
+        description: generatedCopy.copy.description,
+        resolutionCriteria: generatedCopy.copy.resolutionCriteria,
+        category: categorySlug,
+        topic,
+        cutoffAt,
+        opensAt,
+        requiredRank,
+        resolutionSource: "topic_snapshots",
+        createdBy: input.createdBy ?? "ai_generator",
+        generatedReason,
+        newsContext,
+        newsHook: generatedCopy.copy.newsHook,
+        copyProvider: generatedCopy.provider,
+        copyModel: generatedCopy.model,
+        usedCopyFallback: generatedCopy.usedFallback,
+      });
+      batchSlugs.add(slug);
+    }
 
     if (drafts.length === 0) {
       return {
         marketsCreated: 0,
-        skipped: input.snapshot.topics.length,
+        skipped: skippedTopics.length,
         markets: [],
+        skippedTopics,
       };
     }
 
@@ -113,12 +270,16 @@ export class MarketGeneratorService {
         client,
       );
       const existingSlugs = await this.getExistingSlugs(client);
-      const created = [];
-      let skipped = 0;
+      const created: CreatedSnapshotMarket[] = [];
 
       for (const draft of drafts) {
         if (existingSlugs.has(draft.slug)) {
-          skipped += 1;
+          skippedTopics.push({
+            topicSlug: draft.topic.slug,
+            topicName: draft.topic.name,
+            reason: "existing_slug",
+            detail: draft.slug,
+          });
           continue;
         }
 
@@ -130,7 +291,12 @@ export class MarketGeneratorService {
             client,
           );
           if (activeMarket) {
-            skipped += 1;
+            skippedTopics.push({
+              topicSlug: draft.topic.slug,
+              topicName: draft.topic.name,
+              reason: "active_market_exists",
+              detail: activeMarket.slug,
+            });
             existingSlugs.add(activeMarket.slug);
             continue;
           }
@@ -143,7 +309,12 @@ export class MarketGeneratorService {
           client,
         );
         if (duplicate) {
-          skipped += 1;
+          skippedTopics.push({
+            topicSlug: draft.topic.slug,
+            topicName: draft.topic.name,
+            reason: "duplicate_market",
+            detail: duplicate.slug,
+          });
           existingSlugs.add(duplicate.slug);
           continue;
         }
@@ -212,7 +383,7 @@ export class MarketGeneratorService {
             draft.requiredRank,
             draft.createdBy,
             draft.generatedReason,
-            JSON.stringify([draft.description]),
+            JSON.stringify(draft.resolutionCriteria),
             JSON.stringify({
               resolution_source: draft.resolutionSource,
               category: category.slug,
@@ -221,12 +392,30 @@ export class MarketGeneratorService {
               required_rank: draft.requiredRank,
               snapshot_id: input.snapshot.id,
               generated_reason: draft.generatedReason,
+              news_hook: draft.newsHook,
+              copy_provider: draft.copyProvider,
+              copy_model: draft.copyModel,
+              used_copy_fallback: draft.usedCopyFallback,
+              linked_news: draft.newsContext.map((item) => ({
+                id: item.id,
+                title: item.title,
+                url: item.url,
+                source_name: item.sourceName,
+                published_at: item.publishedAt,
+                is_breaking: item.isBreaking,
+                relevance_score: item.relevanceScore,
+              })),
             }),
           ],
         );
 
         if (Number(insertResult.rowCount ?? 0) === 0) {
-          skipped += 1;
+          skippedTopics.push({
+            topicSlug: draft.topic.slug,
+            topicName: draft.topic.name,
+            reason: "existing_slug",
+            detail: draft.slug,
+          });
           existingSlugs.add(draft.slug);
           continue;
         }
@@ -239,6 +428,7 @@ export class MarketGeneratorService {
           `,
           [createStableId("mt", `${marketId}:${topic.id}`), marketId, topic.id],
         );
+        await this.linkMarketNews(marketId, draft.newsContext, client);
 
         created.push({
           id: marketId,
@@ -252,8 +442,9 @@ export class MarketGeneratorService {
 
       return {
         marketsCreated: created.length,
-        skipped,
+        skipped: skippedTopics.length,
         markets: created,
+        skippedTopics,
       };
     } catch (error) {
       await client.query("ROLLBACK");
@@ -394,6 +585,63 @@ export class MarketGeneratorService {
       [categoryId, topicId],
     );
   }
+
+  private async getTopicNewsContext(
+    categorySlug: string,
+    topic: SnapshotTopic,
+  ) {
+    const rows = await queryRows<TopicNewsRow>(
+      this.db,
+      `
+        SELECT
+          ni.id,
+          ni.title,
+          ni.summary,
+          ni.url,
+          ns.name AS source_name,
+          ni.published_at::text,
+          ni.is_breaking,
+          nit.relevance_score,
+          nit.is_primary
+        FROM topics t
+        JOIN categories c ON c.id = t.category_id
+        JOIN news_item_topics nit ON nit.topic_id = t.id
+        JOIN news_items ni ON ni.id = nit.news_item_id
+        JOIN news_sources ns ON ns.id = ni.source_id
+        WHERE c.slug = $1
+          AND t.slug = $2
+          AND t.is_active = true
+        ORDER BY ni.is_breaking DESC, nit.is_primary DESC, nit.relevance_score DESC, ni.published_at DESC
+        LIMIT 15
+      `,
+      [categorySlug, topic.slug],
+    );
+
+    return buildTopicNewsContext(rows, topic);
+  }
+
+  private async linkMarketNews(
+    marketId: string,
+    newsContext: TopicNewsContextItem[],
+    db: Queryable,
+  ) {
+    for (const newsItem of newsContext) {
+      await db.query(
+        `
+          INSERT INTO news_item_markets (
+            id, news_item_id, market_id, relevance_score, created_at
+          ) VALUES ($1, $2, $3, $4, now())
+          ON CONFLICT (news_item_id, market_id) DO NOTHING
+        `,
+        [
+          createStableId("nim", `${newsItem.id}:${marketId}`),
+          newsItem.id,
+          marketId,
+          newsItem.relevanceScore,
+        ],
+      );
+    }
+  }
 }
 
 export function generateMarketDrafts(input: GenerateMarketDraftsInput) {
@@ -420,44 +668,31 @@ export function generateMarketDrafts(input: GenerateMarketDraftsInput) {
       break;
     }
 
-    if (!topic.name.trim() || !topic.slug) {
+    if (!isTopicEligible(topic, minConfidence)) {
       continue;
     }
 
-    if (
-      typeof topic.confidence === "number" &&
-      Number.isFinite(topic.confidence) &&
-      topic.confidence < minConfidence
-    ) {
-      continue;
-    }
-
-    const title = buildMarketTitle({
+    const newsContext = input.newsByTopicSlug?.get(topic.slug) ?? [];
+    const copy = buildFallbackMarketCopy({
       topicName: topic.name,
       categoryName: categoryLabel,
       requiredRank,
       cutoffAt,
+      news: newsContext,
     });
-    const slug = slugify(title);
+    const slug = slugify(copy.title, {
+      maxLength: MAX_MARKET_SLUG_LENGTH,
+    });
     if (!slug || existingSlugs.has(slug)) {
       continue;
     }
 
     drafts.push({
       slug,
-      title,
-      shortDescription: buildMarketHeadline({
-        topicName: topic.name,
-        categoryName: categoryLabel,
-        requiredRank,
-        cutoffAt,
-      }),
-      description: buildResolutionDescription({
-        topicName: topic.name,
-        categoryName: categoryLabel,
-        requiredRank,
-        cutoffAt,
-      }),
+      title: copy.title,
+      shortDescription: copy.shortDescription,
+      description: copy.description,
+      resolutionCriteria: copy.resolutionCriteria,
       category: categorySlug,
       topic,
       cutoffAt,
@@ -468,6 +703,11 @@ export function generateMarketDrafts(input: GenerateMarketDraftsInput) {
       generatedReason:
         input.generatedReason ??
         "Generated from Exoduze hot-topic snapshot metadata.",
+      newsContext,
+      newsHook: copy.newsHook,
+      copyProvider: "fallback",
+      copyModel: "market-copy-fallback-v1",
+      usedCopyFallback: true,
     });
     existingSlugs.add(slug);
   }
@@ -480,13 +720,21 @@ export function buildMarketTitle({
   categoryName,
   requiredRank,
   cutoffAt,
+  newsContext,
 }: {
   topicName: string;
   categoryName: string;
   requiredRank: number;
   cutoffAt: string;
+  newsContext?: TopicNewsContextItem[] | undefined;
 }) {
-  return `Will ${topicName} remain a top ${requiredRank} ${categoryName} topic through ${formatUtcTitleTime(cutoffAt)}?`;
+  return buildFallbackMarketCopy({
+    topicName,
+    categoryName,
+    requiredRank,
+    cutoffAt,
+    news: newsContext ?? [],
+  }).title;
 }
 
 export function buildMarketHeadline({
@@ -494,15 +742,21 @@ export function buildMarketHeadline({
   categoryName,
   requiredRank,
   cutoffAt,
+  newsContext,
 }: {
   topicName: string;
   categoryName: string;
   requiredRank: number;
   cutoffAt: string;
+  newsContext?: TopicNewsContextItem[] | undefined;
 }) {
-  const cutoffLabel = formatUtcTitleTime(cutoffAt);
-
-  return `AI agents compete to predict whether ${topicName} will stay in Exoduze's top ${requiredRank} ${categoryName} topics through ${cutoffLabel}.`;
+  return buildFallbackMarketCopy({
+    topicName,
+    categoryName,
+    requiredRank,
+    cutoffAt,
+    news: newsContext ?? [],
+  }).shortDescription;
 }
 
 export function buildResolutionDescription({
@@ -510,15 +764,21 @@ export function buildResolutionDescription({
   categoryName,
   requiredRank,
   cutoffAt,
+  newsContext,
 }: {
   topicName: string;
   categoryName: string;
   requiredRank: number;
   cutoffAt: string;
+  newsContext?: TopicNewsContextItem[] | undefined;
 }) {
-  const cutoffLabel = formatUtcTitleTime(cutoffAt);
-
-  return `This AI market asks whether ${topicName} can hold a top ${requiredRank} position in Exoduze's ${categoryName} hot-topic rankings through ${cutoffLabel}. It resolves YES if ${topicName} appears within the top ${requiredRank} of the first valid Exoduze 24-hour topic snapshot generated after ${cutoffLabel}. It resolves NO if the topic ranks below #${requiredRank} or does not appear in that snapshot.`;
+  return buildFallbackMarketCopy({
+    topicName,
+    categoryName,
+    requiredRank,
+    cutoffAt,
+    news: newsContext ?? [],
+  }).description;
 }
 
 export function buildAutomaticCutoffAt(opensAt: string) {
@@ -568,13 +828,94 @@ function toTitleLabel(slug: string) {
     .join(" ");
 }
 
-function formatUtcTitleTime(value: string) {
-  const date = new Date(value);
-  const year = date.getUTCFullYear();
-  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
-  const day = String(date.getUTCDate()).padStart(2, "0");
-  const hours = String(date.getUTCHours()).padStart(2, "0");
-  const minutes = String(date.getUTCMinutes()).padStart(2, "0");
+function isTopicEligible(topic: SnapshotTopic, minConfidence: number) {
+  if (!topic.name.trim() || !topic.slug) {
+    return false;
+  }
 
-  return `${year}-${month}-${day} ${hours}:${minutes} UTC`;
+  if (
+    typeof topic.confidence === "number" &&
+    Number.isFinite(topic.confidence) &&
+    topic.confidence < minConfidence
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+function toFiniteNumber(value: number | string | null | undefined) {
+  const numberValue = Number(value ?? 0);
+  return Number.isFinite(numberValue) ? numberValue : 0;
+}
+
+export function buildTopicNewsContext(
+  rows: readonly TopicNewsCandidate[],
+  topic: TopicKeywordRef,
+) {
+  const filteredRows = selectTopicNewsRows(rows, topic);
+  const selectedRows = filteredRows.length > 0 ? filteredRows : rows;
+
+  return selectedRows.slice(0, 6).map((row) => ({
+    id: row.id,
+    title: row.title,
+    summary: row.summary,
+    url: row.url,
+    sourceName: row.source_name,
+    publishedAt: row.published_at,
+    isBreaking: Boolean(row.is_breaking),
+    relevanceScore: toFiniteNumber(row.relevance_score),
+  }));
+}
+
+export function selectTopicNewsRows<
+  T extends Pick<TopicNewsCandidate, "title" | "summary">,
+>(rows: readonly T[], topic: TopicKeywordRef) {
+  return rows.filter((row) => isNewsRelevantToTopic(row, topic));
+}
+
+function isNewsRelevantToTopic(
+  row: Pick<TopicNewsCandidate, "title" | "summary">,
+  topic: TopicKeywordRef,
+) {
+  const haystacks = [row.title, row.summary ?? ""]
+    .map((value) => normalizeSearchText(value))
+    .filter(Boolean);
+  if (haystacks.length === 0) {
+    return false;
+  }
+
+  const keywords = buildTopicKeywords(topic);
+  return keywords.some((keyword) => {
+    return haystacks.some((haystack) => {
+      if (keyword.includes(" ")) {
+        return haystack.includes(keyword);
+      }
+
+      return new RegExp(`\\b${escapeRegex(keyword)}\\b`, "i").test(haystack);
+    });
+  });
+}
+
+function buildTopicKeywords(topic: TopicKeywordRef) {
+  const fullKeywords = [topic.name, topic.slug.replace(/-/g, " ")]
+    .map((value) => normalizeSearchText(value))
+    .filter((value) => value.length >= 2);
+  const tokenKeywords = [...topic.name.split(/\s+/), ...topic.slug.split("-")]
+    .map((value) => normalizeSearchText(value))
+    .filter((value) => value.length >= 3);
+
+  return [...new Set([...fullKeywords, ...tokenKeywords])];
+}
+
+function normalizeSearchText(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function escapeRegex(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

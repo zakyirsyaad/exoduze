@@ -59,6 +59,7 @@ const envSchema = z.object({
   MARKET_GENERATION_ENABLED: enabledBooleanStringSchema,
   ORACLE_RESOLUTION_ENABLED: enabledBooleanStringSchema,
   PAYOUT_FEE_BPS: z.coerce.number().int().min(0).max(10_000).default(0),
+  PAYOUT_TOP_AGENT_BONUS_BPS: z.coerce.number().int().min(0).max(10_000).default(2000),
   COINGECKO_BASE_URL: z.string().url().default("https://api.coingecko.com/api/v3")
 });
 

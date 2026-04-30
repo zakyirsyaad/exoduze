@@ -5,20 +5,43 @@ import type { AppDatabase } from "../../db/database.js";
 import { queryOne, queryRows } from "../../db/query.js";
 import { createStableId } from "../../lib/ids.js";
 import { HttpError, isPgErrorCode } from "../../lib/http-error.js";
+import type {
+  AgentSpecialization,
+  BattleSignalWeights,
+  DataFocus,
+  RiskProfile,
+  StrategyPreset,
+} from "./battle-config.js";
+import {
+  getDefaultBasePersonality,
+  getDefaultBaseStrategy,
+  getDefaultDataFocus,
+  strategyPresetWeights,
+  sumBattleWeights,
+} from "./battle-config.js";
+import {
+  BattlePredictionService,
+  type BattlePredictionJson,
+} from "./battle-prediction.service.js";
 import type { RequestAuth } from "../auth/auth.types.js";
 import { getEffectiveMarketStatus } from "../markets/market-status.js";
-import type { ExoduzeOnchainService, OnchainSignatureStatus } from "../onchain/exoduze-onchain.service.js";
-import {
-  AiDecisionService,
-  hashCanonicalJson,
-  type AiAgentContext,
-  type AiDecisionInput,
-  type AiMarketContext,
-  type AiNewsContextItem,
-} from "../../../../ai-exoduze/index.js";
+import type {
+  ExoduzeOnchainService,
+  OnchainPositionAccount,
+  OnchainSignatureStatus
+} from "../onchain/exoduze-onchain.service.js";
+import { hashCanonicalJson } from "../../../../ai-exoduze/index.js";
 
 type JoinAgentInput = {
   userPrompt?: string | null | undefined;
+  strategyPreset?: StrategyPreset | undefined;
+  technicalWeight?: number | undefined;
+  newsWeight?: number | undefined;
+  sentimentWeight?: number | undefined;
+  macroWeight?: number | undefined;
+  onchainWeight?: number | undefined;
+  optionalInsight?: string | null | undefined;
+  stakeUsdc?: string | undefined;
 };
 
 type StakeConfirmationInput = {
@@ -43,6 +66,7 @@ type MarketContextRow = {
   onchain_market_pubkey: string | null;
   oracle_source: string;
   settlement_asset: string;
+  rules_json: unknown;
   opens_at: string;
   join_deadline_at: string;
   decision_cutoff_at: string;
@@ -58,6 +82,11 @@ type AgentContextRow = {
   name: string;
   description: string;
   status: string;
+  specialization: AgentSpecialization;
+  base_personality: string | null;
+  base_strategy: string | null;
+  risk_profile: RiskProfile;
+  data_focus: unknown;
   owner_wallet_identity_id: string | null;
   owner_wallet_address: string | null;
 };
@@ -78,6 +107,7 @@ type StakeMarketAgentRow = {
   agent_id: string;
   agent_slug: string;
   agent_name: string;
+  owner_wallet_address: string | null;
   final_decision_side: string | null;
   status: string;
   commitment_id: string | null;
@@ -114,15 +144,24 @@ type MonitoringAggregateRow = {
   total_staked_usdc: string;
 };
 
+type ResolvedBattleStrategy = BattleSignalWeights & {
+  preset: StrategyPreset;
+  optionalInsight: string | null;
+  stakeUsdc: string;
+};
+
+const STAKE_BASE_UNIT_DECIMALS = 6n;
+const STAKE_BASE_UNIT_SCALE = 10n ** STAKE_BASE_UNIT_DECIMALS;
+
 export class AiMarketJoinService {
-  private readonly aiDecisionService: AiDecisionService;
+  private readonly battlePredictionService: BattlePredictionService;
 
   constructor(
     private readonly db: AppDatabase,
     private readonly env: Env,
     private readonly onchainService?: ExoduzeOnchainService
   ) {
-    this.aiDecisionService = new AiDecisionService(env);
+    this.battlePredictionService = new BattlePredictionService(env);
   }
 
   async joinAndDecide(
@@ -145,59 +184,50 @@ export class AiMarketJoinService {
     }
 
     await this.assertOwnerJoinSlotAvailable(marketContext.id, agent);
-
-    const [topics, categories, news, latestVersion] = await Promise.all([
-      this.getMarketTopics(market.id),
-      this.getAgentCategories(agent.id),
-      this.getNewsContext(market.id, market.category_slug),
-      this.ensureLatestAgentVersion(agent)
-    ]);
-
-    const aiInput: AiDecisionInput = {
+    const latestVersion = await this.ensureLatestAgentVersion(agent);
+    const strategy = this.resolveBattleStrategyInput(input);
+    const aiDecision = this.battlePredictionService.generatePrediction({
+      agent: {
+        id: agent.id,
+        name: agent.name,
+        specialization: agent.specialization,
+        description: agent.description,
+        basePersonality:
+          agent.base_personality ??
+          getDefaultBasePersonality(agent.specialization),
+        baseStrategy:
+          agent.base_strategy ?? getDefaultBaseStrategy(agent.specialization),
+        riskProfile: agent.risk_profile,
+        dataFocus: this.normalizeAgentDataFocus(agent),
+      },
       market: {
         id: marketContext.id,
         slug: marketContext.slug,
         title: marketContext.title,
-        shortDescription: marketContext.short_description,
+        shortDescription:
+          marketContext.short_description || marketContext.title,
         description: marketContext.description,
-        categorySlug: marketContext.category_slug,
-        categoryName: marketContext.category_name,
-        status: marketContext.status,
-        oracleSource: marketContext.oracle_source,
-        opensAt: marketContext.opens_at,
-        joinDeadlineAt: marketContext.join_deadline_at,
-        decisionCutoffAt: marketContext.decision_cutoff_at,
-        closesAt: marketContext.closes_at,
-        resolvesAt: marketContext.resolves_at,
-        topics
+        resolutionRule: this.buildResolutionRule(
+          marketContext.rules_json,
+          marketContext.description,
+        ),
+        scoringMethod: this.buildScoringMethod(marketContext.settlement_asset),
+        startTime: marketContext.opens_at,
+        endTime: marketContext.closes_at,
       },
-      agent: {
-        id: agent.id,
-        slug: agent.slug,
-        name: agent.name,
-        description: agent.description,
-        categories,
-        latestVersion: {
-          id: latestVersion.id,
-          versionLabel: latestVersion.version_label,
-          versionNo: latestVersion.version_no,
-          modelProvider: latestVersion.model_provider,
-          modelName: latestVersion.model_name,
-          runtimeConfig: latestVersion.runtime_config_json,
-          configHash: latestVersion.config_hash
-        }
-      },
-      userPrompt: input.userPrompt ?? null,
-      news
-    };
-    const aiDecision = await this.aiDecisionService.generateDecision(aiInput);
+      strategy,
+    });
     const marketAgentId = createStableId("ma", `${market.id}:${agent.id}`);
     const decisionSide = this.assertStakeablePredictionSide(
-      aiDecision.decision.decision_side,
+      this.toStakeableDecisionSide(aiDecision.prediction.direction),
       "This AI agent abstained from taking a YES/NO side, so it cannot join this on-chain market."
     );
     const decidedAt = new Date().toISOString();
     const promptArtifactId = createStableId("prompt", `${marketAgentId}:${aiDecision.prompt.promptHash}`);
+    const battleEntryId = createStableId(
+      "be",
+      `${market.id}:${agent.id}:${actor.walletIdentityId}`,
+    );
 
     const client = await this.db.connect();
     try {
@@ -274,10 +304,10 @@ export class AiMarketJoinService {
           marketAgentId,
           1,
           decisionSide,
-          aiDecision.decision.confidence,
-          aiDecision.decision.reason_summary,
-          JSON.stringify(aiDecision.decision.key_signals),
-          JSON.stringify(aiDecision.decision.risk_factors),
+          aiDecision.prediction.confidence,
+          aiDecision.prediction.reasoningSummary,
+          JSON.stringify(aiDecision.keySignals),
+          JSON.stringify(aiDecision.riskFactors),
           aiDecision.reasonHash,
           decidedAt
         ]
@@ -290,6 +320,51 @@ export class AiMarketJoinService {
           WHERE id = $2
         `,
         [decisionId, marketAgentId]
+      );
+
+      await client.query(
+        `
+          INSERT INTO battle_entries (
+            id,
+            market_id,
+            market_agent_id,
+            agent_id,
+            wallet_identity_id,
+            strategy_preset,
+            technical_weight,
+            news_weight,
+            sentiment_weight,
+            macro_weight,
+            onchain_weight,
+            optional_insight,
+            stake_amount,
+            prediction_json,
+            prediction_hash,
+            status,
+            created_at,
+            updated_at
+          ) VALUES (
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::numeric, $14::jsonb, $15, $16, now(), now()
+          )
+        `,
+        [
+          battleEntryId,
+          market.id,
+          marketAgentId,
+          agent.id,
+          actor.walletIdentityId,
+          strategy.preset,
+          strategy.technicalWeight,
+          strategy.newsWeight,
+          strategy.sentimentWeight,
+          strategy.macroWeight,
+          strategy.onchainWeight,
+          strategy.optionalInsight,
+          strategy.stakeUsdc,
+          JSON.stringify(aiDecision.prediction),
+          aiDecision.predictionHash,
+          "submitted",
+        ]
       );
 
       await client.query("COMMIT");
@@ -318,6 +393,14 @@ export class AiMarketJoinService {
             config_hash: aiDecision.prompt.configHash,
             snapshot_hash: aiDecision.prompt.snapshotHash
           },
+          battle_entry: {
+            id: battleEntryId,
+            status: "submitted",
+            strategy_preset: strategy.preset,
+            stake_usdc: strategy.stakeUsdc,
+            prediction_hash: aiDecision.predictionHash,
+            prediction_json: aiDecision.prediction,
+          },
           commitment: {
             verification_status: "pending_onchain",
             prompt_hash: aiDecision.prompt.promptHash,
@@ -328,11 +411,11 @@ export class AiMarketJoinService {
             id: decisionId,
             sequence_no: 1,
             side: decisionSide,
-            confidence: aiDecision.decision.confidence,
-            reason_summary: aiDecision.decision.reason_summary,
+            confidence: aiDecision.prediction.confidence,
+            reason_summary: aiDecision.prediction.reasoningSummary,
             reason_hash: aiDecision.reasonHash,
-            key_signals: aiDecision.decision.key_signals,
-            risk_factors: aiDecision.decision.risk_factors,
+            key_signals: aiDecision.keySignals,
+            risk_factors: aiDecision.riskFactors,
             decided_at: decidedAt
           }
         }
@@ -359,8 +442,11 @@ export class AiMarketJoinService {
     agentIdOrSlug: string,
     input: StakeConfirmationInput
   ) {
-    const stakeUsdc = this.normalizePositiveDecimal(input.stakeUsdc, "stake_usdc");
-    const stakeAmountBaseUnits = this.normalizePositiveInteger(input.stakeAmountBaseUnits, "stake_amount_base_units");
+    const submittedStakeUsdc = this.normalizePositiveDecimal(input.stakeUsdc, "stake_usdc");
+    const submittedStakeAmountBaseUnits = this.normalizePositiveInteger(
+      input.stakeAmountBaseUnits,
+      "stake_amount_base_units"
+    );
     const market = await this.requireMarketContext(marketIdOrSlug);
     const effectiveMarketStatus = getEffectiveMarketStatus(market);
     const marketContext = { ...market, status: effectiveMarketStatus };
@@ -406,6 +492,13 @@ export class AiMarketJoinService {
     }
 
     const onchainPositionRef = this.assertValidSolanaPublicKey(input.onchainPositionRef, "onchain_position_ref");
+    this.assertStakeSyncRefsMatchExpected({
+      actorWalletAddress: actor.walletAddress,
+      marketAgent,
+      marketOnchainPubkey: marketContext.onchain_market_pubkey,
+      onchainCommitmentRef,
+      onchainPositionRef
+    });
     let txSig = input.txSig ? this.assertValidSolanaSignature(input.txSig) : null;
     const userTokenAccount = input.userTokenAccount
       ? this.assertValidSolanaPublicKey(input.userTokenAccount, "user_token_account")
@@ -423,10 +516,15 @@ export class AiMarketJoinService {
       throw new HttpError(409, "ONCHAIN_TX_FAILED", "The submitted on-chain transaction failed.");
     }
 
-    await this.assertStakeSyncReady({
+    const synchronizedStake = await this.assertStakeSyncReady({
+      actorWalletAddress: actor.walletAddress,
+      expectedDecisionSide: marketAgent.final_decision_side,
+      marketOnchainPubkey: marketContext.onchain_market_pubkey,
       onchainCommitmentRef,
       onchainPositionRef,
       requireCommitmentAccount: shouldUpdateCommitment,
+      submittedStakeAmountBaseUnits,
+      submittedStakeUsdc,
       txSig
     });
 
@@ -537,8 +635,8 @@ export class AiMarketJoinService {
           actor.walletIdentityId,
           market.id,
           marketAgent.id,
-          stakeUsdc,
-          stakeUsdc,
+          synchronizedStake.stakeUsdc,
+          synchronizedStake.stakeUsdc,
           onchainPositionRef,
           txSig,
           "open"
@@ -564,6 +662,19 @@ export class AiMarketJoinService {
         market.id,
         recordedAt,
         txSig ?? onchainPositionRef
+      );
+
+      await client.query(
+        `
+          UPDATE battle_entries
+          SET
+            stake_amount = $2::numeric,
+            status = 'locked',
+            updated_at = now()
+          WHERE market_agent_id = $1
+            AND wallet_identity_id = $3
+        `,
+        [marketAgent.id, synchronizedStake.stakeUsdc, actor.walletIdentityId]
       );
 
       await client.query("COMMIT");
@@ -595,7 +706,7 @@ export class AiMarketJoinService {
             status: position.status,
             opened_at: position.created_at,
             updated_at: position.updated_at,
-            stake_amount_base_units: stakeAmountBaseUnits,
+            stake_amount_base_units: synchronizedStake.stakeAmountBaseUnits,
             user_token_account: userTokenAccount,
             vault_pubkey: vaultPubkey
           },
@@ -632,6 +743,7 @@ export class AiMarketJoinService {
           m.onchain_market_pubkey,
           m.oracle_source,
           m.settlement_asset,
+          m.rules_json,
           m.opens_at::text,
           m.join_deadline_at::text,
           m.decision_cutoff_at::text,
@@ -686,6 +798,7 @@ export class AiMarketJoinService {
           ma.agent_id,
           a.slug AS agent_slug,
           a.name AS agent_name,
+          owner.wallet_address AS owner_wallet_address,
           ma.final_decision_side,
           ma.status,
           ac.id AS commitment_id,
@@ -694,6 +807,7 @@ export class AiMarketJoinService {
           ac.verification_status
         FROM market_agents ma
         JOIN agents a ON a.id = ma.agent_id
+        LEFT JOIN wallet_identities owner ON owner.id = a.owner_wallet_identity_id
         LEFT JOIN agent_commitments ac ON ac.market_agent_id = ma.id
         WHERE ma.market_id = $1
           AND (ma.id = $2 OR a.id = $2 OR a.slug = $2)
@@ -836,6 +950,11 @@ export class AiMarketJoinService {
           a.name,
           a.description,
           a.status,
+          a.specialization,
+          a.base_personality,
+          a.base_strategy,
+          a.risk_profile,
+          a.data_focus,
           a.owner_wallet_identity_id,
           w.wallet_address AS owner_wallet_address
         FROM agents a
@@ -907,6 +1026,81 @@ export class AiMarketJoinService {
       "OWNER_MARKET_AGENT_LIMIT",
       `This wallet already has '${conflictingJoin.agent_name}' joined in this market. The current on-chain program supports only one AI agent per wallet per market.`
     );
+  }
+
+  private resolveBattleStrategyInput(input: JoinAgentInput): ResolvedBattleStrategy {
+    const preset = input.strategyPreset ?? "hybrid";
+    const defaultWeights = strategyPresetWeights[preset];
+    const resolved = {
+      preset,
+      technicalWeight: input.technicalWeight ?? defaultWeights.technicalWeight,
+      newsWeight: input.newsWeight ?? defaultWeights.newsWeight,
+      sentimentWeight: input.sentimentWeight ?? defaultWeights.sentimentWeight,
+      macroWeight: input.macroWeight ?? defaultWeights.macroWeight,
+      onchainWeight: input.onchainWeight ?? defaultWeights.onchainWeight,
+      optionalInsight: input.optionalInsight?.trim() || input.userPrompt?.trim() || null,
+      stakeUsdc: input.stakeUsdc
+        ? this.normalizePositiveDecimal(input.stakeUsdc, "stake_usdc")
+        : "0.000000000000",
+    } satisfies ResolvedBattleStrategy;
+
+    if (sumBattleWeights(resolved) !== 100) {
+      throw new HttpError(
+        400,
+        "BATTLE_STRATEGY_INVALID",
+        "Signal weights must total 100.",
+      );
+    }
+
+    return resolved;
+  }
+
+  private normalizeAgentDataFocus(agent: AgentContextRow): DataFocus[] {
+    if (!Array.isArray(agent.data_focus)) {
+      return getDefaultDataFocus(agent.specialization);
+    }
+
+    const normalized = [
+      ...new Set(
+        agent.data_focus.filter(
+          (entry): entry is DataFocus => typeof entry === "string",
+        ),
+      ),
+    ];
+
+    return normalized.length
+      ? normalized
+      : getDefaultDataFocus(agent.specialization);
+  }
+
+  private buildResolutionRule(value: unknown, fallbackDescription: string) {
+    if (Array.isArray(value) && value.length) {
+      return value
+        .map((item) =>
+          typeof item === "string" ? item : JSON.stringify(item),
+        )
+        .join(" ");
+    }
+
+    return fallbackDescription;
+  }
+
+  private buildScoringMethod(settlementAsset: string) {
+    return `Oracle outcome settlement with pooled staking and ${settlementAsset} payout scoring.`;
+  }
+
+  private toStakeableDecisionSide(
+    direction: BattlePredictionJson["direction"],
+  ): string {
+    if (direction === "yes" || direction === "bullish") {
+      return "yes";
+    }
+
+    if (direction === "no" || direction === "bearish") {
+      return "no";
+    }
+
+    return "abstain";
   }
 
   private async getMarketTopics(marketId: string) {
@@ -1013,7 +1207,19 @@ export class AiMarketJoinService {
     );
   }
 
-  private async getNewsContext(marketId: string, categorySlug: string): Promise<AiNewsContextItem[]> {
+  private async getNewsContext(
+    marketId: string,
+    categorySlug: string,
+  ): Promise<
+    Array<{
+      title: string;
+      summary: string | null;
+      url: string;
+      sourceName: string;
+      publishedAt: string;
+      isBreaking: boolean;
+    }>
+  > {
     const linkedNews = await queryRows<{
       title: string;
       summary: string | null;
@@ -1144,7 +1350,15 @@ export class AiMarketJoinService {
         id: agent.id,
         slug: agent.slug,
         name: agent.name,
-        description: agent.description
+        description: agent.description,
+        specialization: agent.specialization,
+        base_personality:
+          agent.base_personality ??
+          getDefaultBasePersonality(agent.specialization),
+        base_strategy:
+          agent.base_strategy ?? getDefaultBaseStrategy(agent.specialization),
+        risk_profile: agent.risk_profile,
+        data_focus: this.normalizeAgentDataFocus(agent),
       },
       default_system: "Exoduze default agent prompt profile.",
       runtime_config: runtimeConfig
@@ -1289,9 +1503,14 @@ export class AiMarketJoinService {
   }
 
   private async assertStakeSyncReady(input: {
+    actorWalletAddress: string;
+    expectedDecisionSide: string;
+    marketOnchainPubkey: string | null;
     onchainCommitmentRef: string;
     onchainPositionRef: string;
     requireCommitmentAccount: boolean;
+    submittedStakeAmountBaseUnits: string;
+    submittedStakeUsdc: string;
     txSig: string | null;
   }) {
     if (!this.onchainService) {
@@ -1303,18 +1522,20 @@ export class AiMarketJoinService {
         );
       }
 
-      return;
+      return {
+        stakeAmountBaseUnits: input.submittedStakeAmountBaseUnits,
+        stakeUsdc: input.submittedStakeUsdc
+      };
     }
 
-    const [commitmentObserved, positionObserved] = await Promise.all([
-      input.requireCommitmentAccount
-        ? this.onchainService.accountExists(input.onchainCommitmentRef)
-        : Promise.resolve(true),
-      this.onchainService.accountExists(input.onchainPositionRef)
-    ]);
+    const positionAccount = await this.getVerifiedOnchainPosition(input);
+    if (positionAccount) {
+      const stakeAmountBaseUnits = BigInt(positionAccount.stake_amount_base_units);
 
-    if (commitmentObserved && positionObserved) {
-      return;
+      return {
+        stakeAmountBaseUnits: stakeAmountBaseUnits.toString(),
+        stakeUsdc: this.formatStakeBaseUnits(stakeAmountBaseUnits)
+      };
     }
 
     throw new HttpError(
@@ -1357,6 +1578,128 @@ export class AiMarketJoinService {
     }
   }
 
+  private assertStakeSyncRefsMatchExpected(input: {
+    actorWalletAddress: string;
+    marketAgent: StakeMarketAgentRow;
+    marketOnchainPubkey: string | null;
+    onchainCommitmentRef: string;
+    onchainPositionRef: string;
+  }) {
+    if (!this.onchainService || !input.marketOnchainPubkey) {
+      return;
+    }
+
+    const expectedCommitmentRef =
+      input.marketAgent.onchain_commitment_ref ??
+      (input.marketAgent.owner_wallet_address
+        ? this.onchainService.deriveAgentCommitmentPda(
+            input.marketOnchainPubkey,
+            input.marketAgent.owner_wallet_address
+          )
+        : null);
+
+    if (
+      expectedCommitmentRef &&
+      expectedCommitmentRef !== input.onchainCommitmentRef
+    ) {
+      throw new HttpError(
+        400,
+        "COMMITMENT_REF_MISMATCH",
+        "onchain_commitment_ref does not match the selected market agent commitment."
+      );
+    }
+
+    const expectedPositionRef = this.onchainService.derivePositionPda(
+      input.marketOnchainPubkey,
+      input.actorWalletAddress,
+      input.onchainCommitmentRef
+    );
+
+    if (expectedPositionRef !== input.onchainPositionRef) {
+      throw new HttpError(
+        400,
+        "POSITION_REF_MISMATCH",
+        "onchain_position_ref does not match the expected user position account."
+      );
+    }
+  }
+
+  private async getVerifiedOnchainPosition(input: {
+    actorWalletAddress: string;
+    expectedDecisionSide: string;
+    marketOnchainPubkey: string | null;
+    onchainCommitmentRef: string;
+    onchainPositionRef: string;
+    requireCommitmentAccount: boolean;
+  }): Promise<OnchainPositionAccount | null> {
+    if (!this.onchainService || !input.marketOnchainPubkey) {
+      return null;
+    }
+
+    const positionAccount = await this.onchainService.getPosition(input.onchainPositionRef);
+    if (!positionAccount) {
+      return null;
+    }
+
+    if (positionAccount.market !== input.marketOnchainPubkey) {
+      throw new HttpError(
+        409,
+        "ONCHAIN_POSITION_MARKET_MISMATCH",
+        "The on-chain position belongs to a different market."
+      );
+    }
+
+    if (positionAccount.user !== input.actorWalletAddress) {
+      throw new HttpError(
+        403,
+        "ONCHAIN_POSITION_OWNER_MISMATCH",
+        "The on-chain position belongs to a different wallet."
+      );
+    }
+
+    if (positionAccount.agent_commitment !== input.onchainCommitmentRef) {
+      throw new HttpError(
+        409,
+        "ONCHAIN_POSITION_COMMITMENT_MISMATCH",
+        "The on-chain position is tied to a different AI commitment."
+      );
+    }
+
+    if (input.requireCommitmentAccount && !positionAccount.agent_commitment) {
+      throw new HttpError(
+        409,
+        "ONCHAIN_COMMITMENT_NOT_FOUND",
+        "The expected on-chain AI commitment was not found yet."
+      );
+    }
+
+    if (positionAccount.side !== input.expectedDecisionSide) {
+      throw new HttpError(
+        409,
+        "ONCHAIN_POSITION_SIDE_MISMATCH",
+        "The on-chain position side does not match the AI decision."
+      );
+    }
+
+    if (positionAccount.status !== "OPEN") {
+      throw new HttpError(
+        409,
+        "ONCHAIN_POSITION_NOT_OPEN",
+        "The on-chain position is no longer open."
+      );
+    }
+
+    if (BigInt(positionAccount.stake_amount_base_units) <= 0n) {
+      throw new HttpError(
+        409,
+        "ONCHAIN_POSITION_EMPTY",
+        "The on-chain position does not hold any stake yet."
+      );
+    }
+
+    return positionAccount;
+  }
+
   private normalizePositiveDecimal(value: string, field: string) {
     const normalized = value.trim();
     if (!/^\d+(\.\d+)?$/.test(normalized) || this.isZeroDecimal(normalized)) {
@@ -1373,6 +1716,18 @@ export class AiMarketJoinService {
     }
 
     return normalized;
+  }
+
+  private formatStakeBaseUnits(units: bigint) {
+    const wholePart = units / STAKE_BASE_UNIT_SCALE;
+    const fractionalPart = (units % STAKE_BASE_UNIT_SCALE)
+      .toString()
+      .padStart(Number(STAKE_BASE_UNIT_DECIMALS), "0")
+      .replace(/0+$/, "");
+
+    return fractionalPart
+      ? `${wholePart.toString()}.${fractionalPart}`
+      : `${wholePart.toString()}`;
   }
 
   private assertStakeablePredictionSide(

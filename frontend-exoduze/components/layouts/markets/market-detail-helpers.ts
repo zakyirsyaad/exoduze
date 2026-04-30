@@ -73,6 +73,30 @@ export const formatTextLabel = (value?: string | null) =>
 export const formatWallet = (value?: string | null) =>
   value ? `${value.slice(0, 4)}...${value.slice(-4)}` : "Not assigned"
 
+export const formatActorIdentity = ({
+  actor,
+  wallet,
+}: {
+  actor?: string | null
+  wallet?: string | null
+}) => {
+  const formattedWallet = wallet ? formatWallet(wallet) : null
+
+  if (actor && formattedWallet) {
+    return `${actor} (${formattedWallet})`
+  }
+
+  if (actor) {
+    return actor
+  }
+
+  if (formattedWallet) {
+    return formattedWallet
+  }
+
+  return "Not assigned"
+}
+
 export const formatContextValue = (value: unknown) => {
   if (value === null || value === undefined) {
     return "N/A"

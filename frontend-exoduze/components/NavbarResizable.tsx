@@ -81,13 +81,13 @@ export function NavbarResizable() {
   ]
   const primaryNavItems = auth.isAdmin
     ? [
-      ...navItems.slice(0, 4),
-      {
-        name: "Admin",
-        link: "/admin",
-      },
-      ...navItems.slice(4),
-    ]
+        ...navItems.slice(0, 4),
+        {
+          name: "Admin",
+          link: "/admin",
+        },
+        ...navItems.slice(4),
+      ]
     : navItems
 
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
@@ -99,9 +99,9 @@ export function NavbarResizable() {
 
   const categoryItems = data?.data?.length
     ? data.data.map((category) => ({
-      name: category.name,
-      link: `/${category.slug}`,
-    }))
+        name: category.name,
+        link: `/${category.slug}`,
+      }))
     : defaultCategoryItems
 
   return (
@@ -146,7 +146,7 @@ export function NavbarResizable() {
           </MobileNavMenu>
         </MobileNav>
 
-        <section className="grid grid-cols-2 gap-2 rounded border px-3 py-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-8">
+        <section className="grid grid-cols-2 gap-2 rounded border px-3 py-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-9">
           {categoryItems.map((item, idx) => (
             <Link
               key={`category-link-${item.name}-${idx}`}

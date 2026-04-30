@@ -28,11 +28,18 @@ import { registerFeedRoutes } from "./routes/feed.routes.js";
 import { registerHealthRoutes } from "./routes/health.routes.js";
 import { registerMarketRoutes } from "./routes/market.routes.js";
 import { registerPortfolioRoutes } from "./routes/portfolio.routes.js";
+import { registerSystemRoutes } from "./routes/system.routes.js";
 import { registerUploadRoutes } from "./routes/upload.routes.js";
 
 export async function buildApp() {
   const app = Fastify({
     logger: true,
+    routerOptions: {
+      // Generated market slugs can legitimately exceed Fastify's
+      // default route param limit, so raise it to keep detail/news
+      // routes reachable for existing long-form market URLs.
+      maxParamLength: 512,
+    },
   });
 
   await app.register(cors, {
@@ -92,6 +99,7 @@ export async function buildApp() {
   await registerMarketRoutes(app, marketsService, aiMarketJoinService);
   await registerPortfolioRoutes(app, portfolioService);
   await registerFeedRoutes(app, feedService);
+  await registerSystemRoutes(app, onchainService);
   await registerUploadRoutes(app, env);
 
   autonomousMarketRunner.start();

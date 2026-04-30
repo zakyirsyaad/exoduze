@@ -199,3 +199,31 @@ export type CatalogBootstrap = {
   categoriesResponse: CategoriesResponse
   categoryPages: CategoryPageResponse[]
 }
+
+export type OnchainConfigSummary = {
+  config_pubkey: string
+  admin_authority: string
+  oracle_authority: string
+  treasury_authority: string
+  fee_bps: number
+  paused: boolean
+}
+
+export type OnchainConfigResponse = {
+  data: {
+    config: OnchainConfigSummary | null
+  }
+}
+
+export type UpdateTreasuryAuthorityInput = {
+  treasury_authority: string
+}
+
+export type UpdateTreasuryAuthorityResult = OnchainConfigSummary & {
+  already_set: boolean
+  tx_sig: string | null
+}
+
+export type UpdateTreasuryAuthorityResponse = {
+  data: UpdateTreasuryAuthorityResult
+}

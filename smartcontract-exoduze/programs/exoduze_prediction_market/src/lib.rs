@@ -7,7 +7,11 @@ use anchor_lang::solana_program::{
 use anchor_spl::token::spl_token;
 use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
 
-declare_id!("C8ih3DKPzNi84Vg9BYx3iRcPWaZLS1iFJ9RVu5dzdswi");
+#[cfg(feature = "localnet-program-id")]
+declare_id!("HktRmDZBsEgpHCuEkzGMsy2RQdsWzMzyNxf7hHHvFkMU");
+
+#[cfg(not(feature = "localnet-program-id"))]
+declare_id!("HcK2u8Ko7L8ZXPRSUAC7ZiDYyT9LuRS383KChtzhkBkd");
 
 const CONFIG_SEED: &[u8] = b"config";
 const MARKET_SEED: &[u8] = b"market";
@@ -44,6 +48,14 @@ pub mod exoduze_prediction_market {
         oracle_authority: Pubkey,
     ) -> Result<()> {
         ctx.accounts.config.oracle_authority = oracle_authority;
+        Ok(())
+    }
+
+    pub fn update_treasury_authority(
+        ctx: Context<UpdateTreasuryAuthority>,
+        treasury_authority: Pubkey,
+    ) -> Result<()> {
+        ctx.accounts.config.treasury_authority = treasury_authority;
         Ok(())
     }
 
@@ -155,16 +167,19 @@ pub mod exoduze_prediction_market {
         );
 
         let commitment = &mut ctx.accounts.agent_commitment;
-        commitment.market = market.key();
-        commitment.agent_authority = ctx.accounts.agent_authority.key();
-        commitment.agent_id_hash = agent_id_hash;
-        commitment.snapshot_hash = snapshot_hash;
-        commitment.prompt_hash = prompt_hash;
-        commitment.config_hash = config_hash;
-        commitment.reason_hash = reason_hash;
-        commitment.decision_side = decision_side;
-        commitment.committed_at = now;
-        commitment.bump = ctx.bumps.agent_commitment;
+        upsert_agent_commitment(
+            commitment,
+            market.key(),
+            ctx.accounts.agent_authority.key(),
+            agent_id_hash,
+            snapshot_hash,
+            prompt_hash,
+            config_hash,
+            reason_hash,
+            decision_side,
+            now,
+            ctx.bumps.agent_commitment,
+        )?;
 
         Ok(())
     }
@@ -398,6 +413,18 @@ pub struct UpdateFeeBps<'info> {
 }
 
 #[derive(Accounts)]
+pub struct UpdateTreasuryAuthority<'info> {
+    #[account(
+        mut,
+        seeds = [CONFIG_SEED],
+        bump = config.bump,
+        has_one = admin_authority @ ExoduzeError::Unauthorized
+    )]
+    pub config: Account<'info, Config>,
+    pub admin_authority: Signer<'info>,
+}
+
+#[derive(Accounts)]
 pub struct TogglePause<'info> {
     #[account(
         mut,
@@ -490,7 +517,7 @@ pub struct CommitAgentDecision<'info> {
 #[derive(Accounts)]
 pub struct OpenPosition<'info> {
     #[account(seeds = [CONFIG_SEED], bump = config.bump)]
-    pub config: Account<'info, Config>,
+    pub config: Box<Account<'info, Config>>,
     #[account(
         mut,
         seeds = [MARKET_SEED, market.market_id_hash.as_ref()],
@@ -498,12 +525,12 @@ pub struct OpenPosition<'info> {
         constraint = market.settlement_mint == settlement_mint.key() @ ExoduzeError::InvalidMint,
         constraint = market.vault == vault.key() @ ExoduzeError::InvalidVault
     )]
-    pub market: Account<'info, Market>,
+    pub market: Box<Account<'info, Market>>,
     #[account(
         seeds = [AGENT_COMMITMENT_SEED, market.key().as_ref(), agent_commitment.agent_authority.as_ref()],
         bump = agent_commitment.bump
     )]
-    pub agent_commitment: Account<'info, AgentCommitment>,
+    pub agent_commitment: Box<Account<'info, AgentCommitment>>,
     #[account(
         init_if_needed,
         payer = user,
@@ -511,7 +538,7 @@ pub struct OpenPosition<'info> {
         seeds = [POSITION_SEED, market.key().as_ref(), user.key().as_ref(), agent_commitment.key().as_ref()],
         bump
     )]
-    pub position: Account<'info, Position>,
+    pub position: Box<Account<'info, Position>>,
     #[account(mut)]
     pub user: Signer<'info>,
     #[account(
@@ -519,8 +546,8 @@ pub struct OpenPosition<'info> {
         constraint = user_token_account.owner == user.key() @ ExoduzeError::InvalidTokenAccount,
         constraint = user_token_account.mint == settlement_mint.key() @ ExoduzeError::InvalidTokenAccount
     )]
-    pub user_token_account: Account<'info, TokenAccount>,
-    pub settlement_mint: Account<'info, Mint>,
+    pub user_token_account: Box<Account<'info, TokenAccount>>,
+    pub settlement_mint: Box<Account<'info, Mint>>,
     #[account(
         mut,
         seeds = [VAULT_SEED, market.key().as_ref()],
@@ -528,7 +555,7 @@ pub struct OpenPosition<'info> {
         constraint = vault.mint == settlement_mint.key() @ ExoduzeError::InvalidVault,
         constraint = vault.owner == vault.key() @ ExoduzeError::InvalidVault
     )]
-    pub vault: Account<'info, TokenAccount>,
+    pub vault: Box<Account<'info, TokenAccount>>,
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
 }
@@ -550,20 +577,20 @@ pub struct ResolveMarket<'info> {
 #[derive(Accounts)]
 pub struct ClaimPayout<'info> {
     #[account(seeds = [CONFIG_SEED], bump = config.bump)]
-    pub config: Account<'info, Config>,
+    pub config: Box<Account<'info, Config>>,
     #[account(
         seeds = [MARKET_SEED, market.market_id_hash.as_ref()],
         bump = market.bump,
         constraint = market.settlement_mint == settlement_mint.key() @ ExoduzeError::InvalidMint,
         constraint = market.vault == vault.key() @ ExoduzeError::InvalidVault
     )]
-    pub market: Account<'info, Market>,
+    pub market: Box<Account<'info, Market>>,
     #[account(
         mut,
         seeds = [POSITION_SEED, market.key().as_ref(), user.key().as_ref(), position.agent_commitment.as_ref()],
         bump = position.bump
     )]
-    pub position: Account<'info, Position>,
+    pub position: Box<Account<'info, Position>>,
     #[account(mut)]
     pub user: Signer<'info>,
     #[account(
@@ -571,14 +598,14 @@ pub struct ClaimPayout<'info> {
         constraint = user_token_account.owner == user.key() @ ExoduzeError::InvalidTokenAccount,
         constraint = user_token_account.mint == settlement_mint.key() @ ExoduzeError::InvalidTokenAccount
     )]
-    pub user_token_account: Account<'info, TokenAccount>,
+    pub user_token_account: Box<Account<'info, TokenAccount>>,
     #[account(
         mut,
         constraint = treasury_token_account.owner == config.treasury_authority @ ExoduzeError::InvalidTokenAccount,
         constraint = treasury_token_account.mint == settlement_mint.key() @ ExoduzeError::InvalidTokenAccount
     )]
-    pub treasury_token_account: Account<'info, TokenAccount>,
-    pub settlement_mint: Account<'info, Mint>,
+    pub treasury_token_account: Box<Account<'info, TokenAccount>>,
+    pub settlement_mint: Box<Account<'info, Mint>>,
     #[account(
         mut,
         seeds = [VAULT_SEED, market.key().as_ref()],
@@ -586,7 +613,7 @@ pub struct ClaimPayout<'info> {
         constraint = vault.mint == settlement_mint.key() @ ExoduzeError::InvalidVault,
         constraint = vault.owner == vault.key() @ ExoduzeError::InvalidVault
     )]
-    pub vault: Account<'info, TokenAccount>,
+    pub vault: Box<Account<'info, TokenAccount>>,
     pub token_program: Program<'info, Token>,
 }
 
@@ -758,6 +785,50 @@ fn resolve_not_before(market: &Market) -> i64 {
     } else {
         market.closes_at
     }
+}
+
+fn upsert_agent_commitment(
+    commitment: &mut AgentCommitment,
+    market: Pubkey,
+    agent_authority: Pubkey,
+    agent_id_hash: [u8; 32],
+    snapshot_hash: [u8; 32],
+    prompt_hash: [u8; 32],
+    config_hash: [u8; 32],
+    reason_hash: [u8; 32],
+    decision_side: Side,
+    committed_at: i64,
+    bump: u8,
+) -> Result<()> {
+    let is_new = commitment.market == Pubkey::default();
+
+    if is_new {
+        commitment.market = market;
+        commitment.agent_authority = agent_authority;
+        commitment.agent_id_hash = agent_id_hash;
+        commitment.snapshot_hash = snapshot_hash;
+        commitment.prompt_hash = prompt_hash;
+        commitment.config_hash = config_hash;
+        commitment.reason_hash = reason_hash;
+        commitment.decision_side = decision_side;
+        commitment.committed_at = committed_at;
+        commitment.bump = bump;
+        return Ok(());
+    }
+
+    require!(
+        commitment.market == market
+            && commitment.agent_authority == agent_authority
+            && commitment.agent_id_hash == agent_id_hash
+            && commitment.snapshot_hash == snapshot_hash
+            && commitment.prompt_hash == prompt_hash
+            && commitment.config_hash == config_hash
+            && commitment.reason_hash == reason_hash
+            && commitment.decision_side == decision_side,
+        ExoduzeError::InvalidAgentCommitment
+    );
+
+    Ok(())
 }
 
 fn calculate_winning_payout(
@@ -934,6 +1005,106 @@ mod tests {
     #[test]
     fn schedule_validation_rejects_invalid_order() {
         let result = validate_market_schedule(20, 10, 30, 40, 50);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn recommit_is_idempotent_for_same_payload() {
+        let market = Pubkey::new_unique();
+        let authority = Pubkey::new_unique();
+        let mut commitment = AgentCommitment {
+            market: Pubkey::default(),
+            agent_authority: Pubkey::default(),
+            agent_id_hash: [0; 32],
+            snapshot_hash: [0; 32],
+            prompt_hash: [0; 32],
+            config_hash: [0; 32],
+            reason_hash: [0; 32],
+            decision_side: Side::Yes,
+            committed_at: 0,
+            bump: 0,
+        };
+
+        upsert_agent_commitment(
+            &mut commitment,
+            market,
+            authority,
+            [1; 32],
+            [2; 32],
+            [3; 32],
+            [4; 32],
+            [5; 32],
+            Side::Yes,
+            100,
+            7,
+        )
+        .unwrap();
+
+        upsert_agent_commitment(
+            &mut commitment,
+            market,
+            authority,
+            [1; 32],
+            [2; 32],
+            [3; 32],
+            [4; 32],
+            [5; 32],
+            Side::Yes,
+            200,
+            7,
+        )
+        .unwrap();
+
+        assert_eq!(commitment.committed_at, 100);
+        assert_eq!(commitment.bump, 7);
+    }
+
+    #[test]
+    fn recommit_rejects_changed_payload() {
+        let market = Pubkey::new_unique();
+        let authority = Pubkey::new_unique();
+        let mut commitment = AgentCommitment {
+            market: Pubkey::default(),
+            agent_authority: Pubkey::default(),
+            agent_id_hash: [0; 32],
+            snapshot_hash: [0; 32],
+            prompt_hash: [0; 32],
+            config_hash: [0; 32],
+            reason_hash: [0; 32],
+            decision_side: Side::Yes,
+            committed_at: 0,
+            bump: 0,
+        };
+
+        upsert_agent_commitment(
+            &mut commitment,
+            market,
+            authority,
+            [1; 32],
+            [2; 32],
+            [3; 32],
+            [4; 32],
+            [5; 32],
+            Side::Yes,
+            100,
+            7,
+        )
+        .unwrap();
+
+        let result = upsert_agent_commitment(
+            &mut commitment,
+            market,
+            authority,
+            [1; 32],
+            [9; 32],
+            [3; 32],
+            [4; 32],
+            [5; 32],
+            Side::No,
+            200,
+            7,
+        );
+
         assert!(result.is_err());
     }
 }

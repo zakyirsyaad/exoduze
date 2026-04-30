@@ -16,10 +16,12 @@ import {
 import { Input } from "@/components/ui/input"
 import {
   fetchHealth,
+  fetchOnchainConfig,
   refreshFeed,
   runCronJob,
+  updateTreasuryAuthority,
 } from "@/lib/admin-client"
-import type { CronJobId } from "@/lib/admin-types"
+import type { CronJobId, OnchainConfigSummary } from "@/lib/admin-types"
 import { formatDisplayDateTime } from "@/lib/time-formatters"
 
 const cronStorageKey = "exoduze:cron-secret"
@@ -28,6 +30,10 @@ export function SystemAdminPage() {
   const [health, setHealth] = React.useState<Awaited<ReturnType<typeof fetchHealth>> | null>(null)
   const [healthLoading, setHealthLoading] = React.useState(true)
   const [healthError, setHealthError] = React.useState<string | null>(null)
+  const [onchainConfig, setOnchainConfig] = React.useState<OnchainConfigSummary | null>(null)
+  const [onchainConfigLoading, setOnchainConfigLoading] = React.useState(true)
+  const [onchainConfigError, setOnchainConfigError] = React.useState<string | null>(null)
+  const [treasuryAuthority, setTreasuryAuthority] = React.useState("")
   const [feedCategory, setFeedCategory] = React.useState("")
   const [latestResult, setLatestResult] = React.useState<unknown>(null)
   const [working, setWorking] = React.useState(false)
@@ -62,9 +68,35 @@ export function SystemAdminPage() {
     }
   }, [])
 
+  const loadOnchainConfig = React.useCallback(async () => {
+    setOnchainConfigLoading(true)
+    setOnchainConfigError(null)
+
+    try {
+      const response = await fetchOnchainConfig()
+      const config = response.data.config
+
+      setOnchainConfig(config)
+      setTreasuryAuthority((currentValue) =>
+        currentValue.trim() ? currentValue : config?.treasury_authority ?? ""
+      )
+    } catch (loadError) {
+      setOnchainConfigError(
+        loadError instanceof Error
+          ? loadError.message
+          : "Unable to load on-chain config"
+      )
+    } finally {
+      setOnchainConfigLoading(false)
+    }
+  }, [])
+
   React.useEffect(() => {
     const healthTimeoutId = window.setTimeout(() => {
       void loadHealth()
+    }, 0)
+    const onchainTimeoutId = window.setTimeout(() => {
+      void loadOnchainConfig()
     }, 0)
     const sessionSecret = window.sessionStorage.getItem(cronStorageKey) ?? ""
     const secretTimeoutId = window.setTimeout(() => {
@@ -73,9 +105,10 @@ export function SystemAdminPage() {
 
     return () => {
       window.clearTimeout(healthTimeoutId)
+      window.clearTimeout(onchainTimeoutId)
       window.clearTimeout(secretTimeoutId)
     }
-  }, [loadHealth])
+  }, [loadHealth, loadOnchainConfig])
 
   React.useEffect(() => {
     if (typeof window === "undefined") {
@@ -125,6 +158,40 @@ export function SystemAdminPage() {
     } catch (actionError) {
       toast.error(
         actionError instanceof Error ? actionError.message : "Unable to run cron job"
+      )
+    } finally {
+      setWorking(false)
+    }
+  }
+
+  async function handleUpdateTreasuryAuthority() {
+    const nextTreasuryAuthority = treasuryAuthority.trim()
+
+    if (!nextTreasuryAuthority) {
+      toast.error("Treasury authority is required")
+      return
+    }
+
+    setWorking(true)
+
+    try {
+      const result = await updateTreasuryAuthority({
+        treasury_authority: nextTreasuryAuthority,
+      })
+
+      setLatestResult(result)
+      setOnchainConfig(result.data)
+      setTreasuryAuthority(result.data.treasury_authority)
+      toast.success(
+        result.data.already_set
+          ? "Treasury authority is already set"
+          : "Treasury authority updated"
+      )
+    } catch (actionError) {
+      toast.error(
+        actionError instanceof Error
+          ? actionError.message
+          : "Unable to update treasury authority"
       )
     } finally {
       setWorking(false)
@@ -182,6 +249,83 @@ export function SystemAdminPage() {
               </label>
               <Button onClick={() => void handleRefreshFeed()} disabled={working}>
                 Refresh Feed
+              </Button>
+            </CardContent>
+          </Card>
+        </section>
+
+        <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+          <Card className="bg-white/80 dark:bg-white/5">
+            <CardHeader>
+              <CardTitle>On-chain Config</CardTitle>
+              <CardDescription>
+                Live config state loaded from the Solana program.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="grid gap-4">
+              {onchainConfigLoading ? (
+                <p className="text-sm text-neutral-500">Loading on-chain config...</p>
+              ) : onchainConfigError ? (
+                <p className="text-sm text-red-500">{onchainConfigError}</p>
+              ) : onchainConfig ? (
+                <div className="grid gap-3 text-sm md:grid-cols-2">
+                  <ConfigField label="Config PDA" value={onchainConfig.config_pubkey} mono />
+                  <ConfigField
+                    label="Treasury Authority"
+                    value={onchainConfig.treasury_authority}
+                    mono
+                  />
+                  <ConfigField
+                    label="Admin Authority"
+                    value={onchainConfig.admin_authority}
+                    mono
+                  />
+                  <ConfigField
+                    label="Oracle Authority"
+                    value={onchainConfig.oracle_authority}
+                    mono
+                  />
+                  <ConfigField
+                    label="Status"
+                    value={onchainConfig.paused ? "Paused" : "Active"}
+                  />
+                  <ConfigField
+                    label="Fee"
+                    value={`${onchainConfig.fee_bps} bps`}
+                  />
+                </div>
+              ) : (
+                <p className="text-sm text-neutral-500">
+                  On-chain config has not been initialized yet.
+                </p>
+              )}
+              <Button variant="outline" onClick={() => void loadOnchainConfig()}>
+                Refresh On-chain Config
+              </Button>
+            </CardContent>
+          </Card>
+
+          <Card className="bg-white/80 dark:bg-white/5">
+            <CardHeader>
+              <CardTitle>Treasury Rotation</CardTitle>
+              <CardDescription>
+                Update `treasury_authority` for future payout fee transfers.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="grid gap-3">
+              <label className="grid gap-1 text-sm">
+                <span className="text-neutral-500">Treasury wallet</span>
+                <Input
+                  value={treasuryAuthority}
+                  onChange={(event) => setTreasuryAuthority(event.target.value)}
+                  placeholder="Paste a Solana public key"
+                />
+              </label>
+              <Button
+                onClick={() => void handleUpdateTreasuryAuthority()}
+                disabled={working}
+              >
+                Update Treasury Authority
               </Button>
             </CardContent>
           </Card>
@@ -407,6 +551,25 @@ function HealthField({
     <div>
       <p className="text-neutral-500">{label}</p>
       <p className="mt-1 font-medium">{value}</p>
+    </div>
+  )
+}
+
+function ConfigField({
+  label,
+  mono = false,
+  value,
+}: {
+  label: string
+  mono?: boolean
+  value: string
+}) {
+  return (
+    <div>
+      <p className="text-neutral-500">{label}</p>
+      <p className={mono ? "mt-1 break-all font-mono text-xs" : "mt-1 font-medium"}>
+        {value}
+      </p>
     </div>
   )
 }

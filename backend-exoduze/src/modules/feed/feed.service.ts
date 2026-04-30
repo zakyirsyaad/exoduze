@@ -89,7 +89,33 @@ type ScoredHotTopicRow = {
 };
 
 const categoryAliases: Record<string, string> = {
-  technology: "tech"
+  technology: "tech",
+};
+
+const topicSearchAliases: Record<string, string[]> = {
+  ai: ["artificial intelligence"],
+  basketball: ["nba", "wnba", "college basketball"],
+  biotech: ["drug trial", "fda approval"],
+  chips: ["semiconductor", "semiconductors", "chipmaker", "chipmakers"],
+  cpi: ["consumer price index", "inflation data", "inflation report"],
+  defi: ["decentralized finance", "onchain finance"],
+  etf: ["exchange traded fund", "spot etf", "spot bitcoin etf"],
+  football: ["nfl", "soccer", "premier league", "champions league"],
+  "formula-1": ["f1", "grand prix"],
+  gdp: ["gross domestic product"],
+  geopolitics: ["trade war", "diplomatic tensions", "regional conflict"],
+  labor: ["jobs report", "payrolls", "unemployment"],
+  policy: ["government policy", "policy bill", "policy proposal"],
+  "product-launch": ["product launch", "launch event", "product debut"],
+  rates: ["interest rates", "rate cut", "rate hike", "fed rates"],
+  valorant: [
+    "valorant champions tour",
+    "valorant esports",
+    "vct americas",
+    "vct masters",
+  ],
+  "league-of-legends": ["lol esports", "lck", "lcs"],
+  dota: ["dota 2"],
 };
 
 export class FeedService {
@@ -101,7 +127,7 @@ export class FeedService {
   constructor(
     private readonly db: AppDatabase,
     private readonly env: Env,
-    private readonly logger?: FeedLogger
+    private readonly logger?: FeedLogger,
   ) {
     this.newsApiClient = new NewsApiClient(env);
     this.finnhubClient = new FinnhubClient(env);
@@ -129,7 +155,7 @@ export class FeedService {
             JOIN topics t ON t.id = nit.topic_id
             WHERE nit.news_item_id = ni.id AND t.slug = $${params.length + 1}
           )
-        `
+        `,
       );
       params.push(query.topic);
     }
@@ -168,7 +194,7 @@ export class FeedService {
         ORDER BY ni.published_at DESC
         LIMIT ${query.limit}
       `,
-      params
+      params,
     );
 
     const items = await Promise.all(
@@ -182,12 +208,12 @@ export class FeedService {
         is_breaking: Boolean(row.is_breaking),
         source: {
           slug: row.source_slug,
-          name: row.source_name
+          name: row.source_name,
         },
         category: row.category_slug
           ? {
               slug: row.category_slug,
-              name: row.category_name
+              name: row.category_name,
             }
           : null,
         topics: await queryRows<{ slug: string; name: string }>(
@@ -199,9 +225,9 @@ export class FeedService {
             WHERE nit.news_item_id = $1
             ORDER BY nit.is_primary DESC, t.name ASC
           `,
-          [row.id]
-        )
-      }))
+          [row.id],
+        ),
+      })),
     );
 
     return { data: { items } };
@@ -209,39 +235,52 @@ export class FeedService {
 
   async getHotTopics(query: HotTopicsQuery) {
     const normalizedCategorySlug = this.normalizeCategorySlug(query.category);
-    const categorySlug = normalizedCategorySlug === "trending" ? undefined : normalizedCategorySlug;
+    const categorySlug =
+      normalizedCategorySlug === "trending"
+        ? undefined
+        : normalizedCategorySlug;
     await this.ensureHotTopicSnapshots(categorySlug, query.window);
 
-    const rows = await this.queryHotTopicRows(categorySlug, query.window, query.limit);
+    const rows = await this.queryHotTopicRows(
+      categorySlug,
+      query.window,
+      query.limit,
+    );
 
     return {
       data: {
         window: query.window,
-        category: categorySlug && rows[0]?.category_slug
-          ? {
-              slug: rows[0].category_slug,
-              name: rows[0].category_name
-            }
-          : null,
+        category:
+          categorySlug && rows[0]?.category_slug
+            ? {
+                slug: rows[0].category_slug,
+                name: rows[0].category_name,
+              }
+            : null,
         topics: rows.map((row) => ({
           id: row.topic_id,
           slug: row.topic_slug,
           name: row.topic_name,
           mentions_count: this.toNumber(row.mentions_count),
-          previous_mentions_count: this.toNullableNumber(row.previous_mentions_count),
+          previous_mentions_count: this.toNullableNumber(
+            row.previous_mentions_count,
+          ),
           mentions_delta: this.toNumber(row.mentions_delta),
           mentions_delta_pct: this.toNullableNumber(row.mentions_delta_pct),
           unique_sources_count: this.toNumber(row.unique_sources_count),
           breaking_news_count: this.toNumber(row.breaking_news_count),
           trend_direction: row.trend_direction,
           heat_score: this.toNumber(row.heat_score),
-          rank: this.toNumber(row.rank)
-        }))
-      }
+          rank: this.toNumber(row.rank),
+        })),
+      },
     };
   }
 
-  private async ensureHotTopicSnapshots(categorySlug: string | undefined, window: string) {
+  private async ensureHotTopicSnapshots(
+    categorySlug: string | undefined,
+    window: string,
+  ) {
     const existing = await queryOne<{ exists: number }>(
       this.db,
       `
@@ -252,7 +291,7 @@ export class FeedService {
         ${categorySlug ? "AND c.slug = $2" : ""}
         LIMIT 1
       `,
-      categorySlug ? [window, categorySlug] : [window]
+      categorySlug ? [window, categorySlug] : [window],
     );
 
     if (existing) {
@@ -262,10 +301,18 @@ export class FeedService {
     await this.rebuildHotTopicSnapshots(categorySlug);
   }
 
-  private async queryHotTopicRows(categorySlug: string | undefined, window: string, limit: number) {
+  private async queryHotTopicRows(
+    categorySlug: string | undefined,
+    window: string,
+    limit: number,
+  ) {
     const params: unknown[] = [window];
-    const categoryJoin = categorySlug ? "JOIN categories latest_c ON latest_c.id = hts.category_id" : "";
-    const categoryFilter = categorySlug ? `AND latest_c.slug = $${params.length + 1}` : "";
+    const categoryJoin = categorySlug
+      ? "JOIN categories latest_c ON latest_c.id = hts.category_id"
+      : "";
+    const categoryFilter = categorySlug
+      ? `AND latest_c.slug = $${params.length + 1}`
+      : "";
 
     if (categorySlug) {
       params.push(categorySlug);
@@ -310,7 +357,7 @@ export class FeedService {
         ORDER BY hts.heat_score DESC, hts.rank ASC
         LIMIT ${limitParam}
       `,
-      params
+      params,
     );
   }
 
@@ -325,8 +372,8 @@ export class FeedService {
           refreshed: false,
           category: categorySlug ?? null,
           categories: [],
-          reason: "ttl_active"
-        }
+          reason: "ttl_active",
+        },
       };
     }
 
@@ -344,8 +391,8 @@ export class FeedService {
         refreshed: true,
         category: categorySlug ?? null,
         categories,
-        refreshed_at: new Date().toISOString()
-      }
+        refreshed_at: new Date().toISOString(),
+      },
     };
   }
 
@@ -362,7 +409,7 @@ export class FeedService {
           WHERE t.slug = $1
           LIMIT 1
         `,
-        [topicSlug]
+        [topicSlug],
       );
 
       effectiveCategory = topicCategory?.slug;
@@ -401,9 +448,12 @@ export class FeedService {
 
     const categories = await queryRows<CategoryRecord>(
       this.db,
-      "SELECT id, slug, name FROM categories WHERE is_active = true ORDER BY sort_order ASC, name ASC"
+      "SELECT id, slug, name FROM categories WHERE is_active = true ORDER BY sort_order ASC, name ASC",
     );
-    const refreshCategories = ["trending", ...categories.map((category) => category.slug)];
+    const refreshCategories = [
+      "trending",
+      ...categories.map((category) => category.slug),
+    ];
 
     for (const category of refreshCategories) {
       await this.refreshCategory(category);
@@ -423,7 +473,8 @@ export class FeedService {
 
     if (categorySlug === "trending") {
       await this.safeRefresh(`refreshCategory:${categorySlug}`, async () => {
-        const items = await this.newsApiClient.fetchCategoryHeadlines("trending");
+        const items =
+          await this.newsApiClient.fetchCategoryHeadlines("trending");
         await this.storeTrendingNewsItems(items);
       });
       await this.rebuildHotTopicSnapshots();
@@ -433,7 +484,7 @@ export class FeedService {
     const category = await queryOne<CategoryRecord>(
       this.db,
       "SELECT id, slug, name FROM categories WHERE slug = $1 LIMIT 1",
-      [categorySlug]
+      [categorySlug],
     );
 
     if (!category) {
@@ -447,37 +498,95 @@ export class FeedService {
     await this.rebuildHotTopicSnapshots(categorySlug);
   }
 
-  private async fetchCategoryItems(categorySlug: string): Promise<NormalizedFeedItem[]> {
+  private async fetchCategoryItems(
+    categorySlug: string,
+  ): Promise<NormalizedFeedItem[]> {
     if (categorySlug === "finance") {
       const dateRange = this.getFinnhubCompanyNewsDateRange();
       const symbols = this.env.FINNHUB_FINANCE_SYMBOLS.split(",")
         .map((symbol) => symbol.trim().toUpperCase())
         .filter(Boolean);
 
-      const batches = await Promise.all(
-        symbols.map((symbol) =>
-          this.fetchOptional(`fetchCategoryItems:finance:finnhub:${symbol}`, () =>
-            this.finnhubClient.fetchCompanyNews(symbol, dateRange, 20), []
-          )
-        )
-      );
+      const [batches, topicSearchItems] = await Promise.all([
+        Promise.all(
+          symbols.map((symbol) =>
+            this.fetchOptional(
+              `fetchCategoryItems:finance:finnhub:${symbol}`,
+              () => this.finnhubClient.fetchCompanyNews(symbol, dateRange, 20),
+              [],
+            ),
+          ),
+        ),
+        this.fetchOptional(
+          "fetchCategoryItems:finance:newsapi-topics",
+          () => this.fetchCategoryTopicSearch(categorySlug, "finance", 20),
+          [],
+        ),
+      ]);
 
-      return this.dedupeItems(batches.flat()).slice(0, 20);
+      return this.dedupeItems([...batches.flat(), ...topicSearchItems]).slice(
+        0,
+        20,
+      );
     }
 
     if (categorySlug === "tech" || categorySlug === "technology") {
-      const [finnhubItems, newsApiItems] = await Promise.all([
-        this.fetchOptional("fetchCategoryItems:tech:finnhub", () => this.finnhubClient.fetchMarketNews("technology", 10), []),
-        this.fetchOptional("fetchCategoryItems:tech:newsapi", () =>
-          this.newsApiClient.fetchCategoryHeadlines("technology", { limit: 10, includeCountry: false }), []
-        )
+      const [finnhubItems, newsApiItems, topicSearchItems] = await Promise.all([
+        this.fetchOptional(
+          "fetchCategoryItems:tech:finnhub",
+          () => this.finnhubClient.fetchMarketNews("technology", 10),
+          [],
+        ),
+        this.fetchOptional(
+          "fetchCategoryItems:tech:newsapi",
+          () =>
+            this.newsApiClient.fetchCategoryHeadlines("technology", {
+              limit: 10,
+              includeCountry: false,
+            }),
+          [],
+        ),
+        this.fetchOptional(
+          "fetchCategoryItems:tech:newsapi-topics",
+          () => this.fetchCategoryTopicSearch("tech", "technology", 20),
+          [],
+        ),
       ]);
 
-      return this.dedupeItems([...finnhubItems, ...newsApiItems]);
+      return this.dedupeItems([
+        ...finnhubItems,
+        ...newsApiItems,
+        ...topicSearchItems,
+      ]);
     }
 
     if (categorySlug === "politics") {
-      return this.newsApiClient.search("politics", { limit: 10 });
+      return this.fetchCategoryTopicSearch(categorySlug, "politics", 20);
+    }
+
+    if (categorySlug === "esports") {
+      return this.fetchCategoryTopicSearch(categorySlug, "esports", 20);
+    }
+
+    if (
+      categorySlug === "economy" ||
+      categorySlug === "science" ||
+      categorySlug === "sports"
+    ) {
+      const [headlineItems, topicSearchItems] = await Promise.all([
+        this.fetchOptional(
+          `fetchCategoryItems:${categorySlug}:headlines`,
+          () => this.newsApiClient.fetchCategoryHeadlines(categorySlug),
+          [],
+        ),
+        this.fetchOptional(
+          `fetchCategoryItems:${categorySlug}:topics`,
+          () => this.fetchCategoryTopicSearch(categorySlug, categorySlug, 20),
+          [],
+        ),
+      ]);
+
+      return this.dedupeItems([...headlineItems, ...topicSearchItems]);
     }
 
     return this.newsApiClient.fetchCategoryHeadlines(categorySlug);
@@ -486,16 +595,69 @@ export class FeedService {
   private getFinnhubCompanyNewsDateRange() {
     const to = new Date();
     const from = new Date(to);
-    from.setUTCDate(from.getUTCDate() - this.env.FINNHUB_COMPANY_NEWS_LOOKBACK_DAYS);
+    from.setUTCDate(
+      from.getUTCDate() - this.env.FINNHUB_COMPANY_NEWS_LOOKBACK_DAYS,
+    );
 
     return {
       from: this.formatDateOnly(from),
-      to: this.formatDateOnly(to)
+      to: this.formatDateOnly(to),
     };
   }
 
   private normalizeCategorySlug(categorySlug?: string) {
-    return categorySlug ? (categoryAliases[categorySlug] ?? categorySlug) : undefined;
+    return categorySlug
+      ? (categoryAliases[categorySlug] ?? categorySlug)
+      : undefined;
+  }
+
+  private async buildCategoryTopicSearchQuery(
+    categorySlug: string,
+    fallbackTerm: string,
+  ) {
+    const topics = await queryRows<TopicSeedRow>(
+      this.db,
+      `
+        SELECT t.id, t.slug, t.name
+        FROM topics t
+        JOIN categories c ON c.id = t.category_id
+        WHERE c.slug = $1
+          AND c.is_active = true
+          AND t.is_active = true
+        ORDER BY t.name ASC
+      `,
+      [categorySlug],
+    );
+
+    const terms = [
+      fallbackTerm,
+      ...topics.flatMap((topic) => [
+        topic.name,
+        topic.slug.replace(/-/g, " "),
+        ...(topicSearchAliases[topic.slug] ?? []),
+      ]),
+    ]
+      .map((value) => value.trim())
+      .filter(
+        (value, index, items) =>
+          value.length >= 3 && items.indexOf(value) === index,
+      )
+      .slice(0, 12);
+
+    return terms
+      .map((term) => (term.includes(" ") ? `"${term}"` : term))
+      .join(" OR ");
+  }
+
+  private async fetchCategoryTopicSearch(
+    categorySlug: string,
+    fallbackTerm: string,
+    limit: number,
+  ) {
+    return this.newsApiClient.search(
+      await this.buildCategoryTopicSearchQuery(categorySlug, fallbackTerm),
+      { limit },
+    );
   }
 
   private formatDateOnly(date: Date) {
@@ -515,14 +677,24 @@ export class FeedService {
       deduped.push(item);
     }
 
-    return deduped.sort((left, right) => Date.parse(right.publishedAt) - Date.parse(left.publishedAt));
+    return deduped.sort(
+      (left, right) =>
+        Date.parse(right.publishedAt) - Date.parse(left.publishedAt),
+    );
   }
 
-  private async fetchOptional<T>(context: string, operation: () => Promise<T>, fallback: T): Promise<T> {
+  private async fetchOptional<T>(
+    context: string,
+    operation: () => Promise<T>,
+    fallback: T,
+  ): Promise<T> {
     try {
       return await operation();
     } catch (error) {
-      this.logger?.error({ err: error, context }, "Feed provider request failed.");
+      this.logger?.error(
+        { err: error, context },
+        "Feed provider request failed.",
+      );
       return fallback;
     }
   }
@@ -530,7 +702,7 @@ export class FeedService {
   private async refreshCryptoSignals() {
     const category = await queryOne<CategoryRecord>(
       this.db,
-      "SELECT id, slug, name FROM categories WHERE slug = 'crypto' LIMIT 1"
+      "SELECT id, slug, name FROM categories WHERE slug = 'crypto' LIMIT 1",
     );
 
     if (!category) {
@@ -538,10 +710,17 @@ export class FeedService {
     }
 
     const [headlineItems, marketPulse] = await Promise.all([
-      this.fetchOptional("refreshCryptoSignals:newsapi", () =>
-        this.newsApiClient.search("crypto OR bitcoin OR ethereum OR solana"), []
+      this.fetchOptional(
+        "refreshCryptoSignals:newsapi",
+        () =>
+          this.newsApiClient.search("crypto OR bitcoin OR ethereum OR solana"),
+        [],
       ),
-      this.fetchOptional("refreshCryptoSignals:coingecko", () => this.coingeckoClient.fetchTopMarketPulse(), [])
+      this.fetchOptional(
+        "refreshCryptoSignals:coingecko",
+        () => this.coingeckoClient.fetchTopMarketPulse(),
+        [],
+      ),
     ]);
 
     await this.storeNewsItems(category.id, headlineItems, undefined, true);
@@ -559,9 +738,13 @@ export class FeedService {
       mentionWeight: number;
       topicHints: string[];
       rawPayload: unknown;
-    }>
+    }>,
   ) {
-    const sourceId = await this.ensureSource("CoinGecko", "market-data", "https://api.coingecko.com/api/v3");
+    const sourceId = await this.ensureSource(
+      "CoinGecko",
+      "market-data",
+      "https://api.coingecko.com/api/v3",
+    );
 
     for (const item of items) {
       const id = createStableId("news", item.url);
@@ -591,11 +774,16 @@ export class FeedService {
           null,
           true,
           item.mentionWeight,
-          JSON.stringify(item.rawPayload)
-        ]
+          JSON.stringify(item.rawPayload),
+        ],
       );
 
-      await this.linkTopicsAndMarkets(id, categoryId, `${item.title} ${item.summary}`, item.topicHints);
+      await this.linkTopicsAndMarkets(
+        id,
+        categoryId,
+        `${item.title} ${item.summary}`,
+        item.topicHints,
+      );
     }
   }
 
@@ -603,14 +791,18 @@ export class FeedService {
     categoryId: string | null,
     items: NormalizedFeedItem[],
     topicHints?: string[],
-    isCryptoSearch = false
+    isCryptoSearch = false,
   ) {
     if (items.length === 0) {
       return;
     }
 
     for (const item of items) {
-      const sourceId = await this.ensureSource(item.sourceName, "news-api", item.sourceUrl);
+      const sourceId = await this.ensureSource(
+        item.sourceName,
+        "news-api",
+        item.sourceUrl,
+      );
       const id = createStableId("news", item.url);
 
       await this.db.query(
@@ -639,12 +831,18 @@ export class FeedService {
           null,
           item.isBreaking,
           item.mentionWeight,
-          JSON.stringify(item.rawPayload)
-        ]
+          JSON.stringify(item.rawPayload),
+        ],
       );
 
       if (categoryId) {
-        await this.linkTopicsAndMarkets(id, categoryId, `${item.title} ${item.summary ?? ""}`, topicHints, isCryptoSearch);
+        await this.linkTopicsAndMarkets(
+          id,
+          categoryId,
+          `${item.title} ${item.summary ?? ""}`,
+          topicHints,
+          isCryptoSearch,
+        );
       }
     }
   }
@@ -655,7 +853,11 @@ export class FeedService {
     }
 
     for (const item of items) {
-      const sourceId = await this.ensureSource(item.sourceName, "news-api", item.sourceUrl);
+      const sourceId = await this.ensureSource(
+        item.sourceName,
+        "news-api",
+        item.sourceUrl,
+      );
       const id = createStableId("news", item.url);
 
       await this.db.query(
@@ -684,11 +886,14 @@ export class FeedService {
           null,
           item.isBreaking,
           item.mentionWeight,
-          JSON.stringify(item.rawPayload)
-        ]
+          JSON.stringify(item.rawPayload),
+        ],
       );
 
-      await this.linkTopicsAcrossAllCategories(id, `${item.title} ${item.summary ?? ""}`);
+      await this.linkTopicsAcrossAllCategories(
+        id,
+        `${item.title} ${item.summary ?? ""}`,
+      );
     }
   }
 
@@ -697,41 +902,50 @@ export class FeedService {
     categoryId: string,
     text: string,
     topicHints?: string[],
-    isCryptoSearch = false
+    isCryptoSearch = false,
   ) {
     const topics = await queryRows<TopicSeedRow>(
       this.db,
       "SELECT id, slug, name FROM topics WHERE category_id = $1",
-      [categoryId]
+      [categoryId],
     );
 
-    const normalized = text.toLowerCase();
+    const normalized = normalizeTopicSearchText(text);
     const hinted = topicHints?.map((hint) => hint.toLowerCase()) ?? [];
 
     const matches = topics.filter((topic) => {
-      const tokens = [topic.slug.replace(/-/g, " "), topic.name.toLowerCase(), ...hinted];
-      return tokens.some((token) => token.length > 2 && normalized.includes(token));
+      const tokens = buildTopicMatchTokens(topic, hinted);
+      return tokens.some((token) => topicTokenMatches(normalized, token));
     });
 
     const fallbackTopic =
       matches.length === 0 && isCryptoSearch
-        ? topics.find((topic) => topic.slug === "bitcoin" || topic.slug === "solana")
+        ? topics.find(
+            (topic) => topic.slug === "bitcoin" || topic.slug === "solana",
+          )
         : null;
 
-    const finalMatches = matches.length > 0 ? matches : fallbackTopic ? [fallbackTopic] : [];
+    const finalMatches =
+      matches.length > 0 ? matches : fallbackTopic ? [fallbackTopic] : [];
 
     for (const [index, topic] of finalMatches.entries()) {
       await this.insertTopicAndMarketLinks(newsItemId, topic.id, index);
     }
   }
 
-  private async linkTopicsAcrossAllCategories(newsItemId: string, text: string) {
-    const topics = await queryRows<TopicSeedRow>(this.db, "SELECT id, slug, name FROM topics");
-    const normalized = text.toLowerCase();
+  private async linkTopicsAcrossAllCategories(
+    newsItemId: string,
+    text: string,
+  ) {
+    const topics = await queryRows<TopicSeedRow>(
+      this.db,
+      "SELECT id, slug, name FROM topics",
+    );
+    const normalized = normalizeTopicSearchText(text);
 
     const matches = topics.filter((topic) => {
-      const tokens = [topic.slug.replace(/-/g, " "), topic.name.toLowerCase()];
-      return tokens.some((token) => token.length > 2 && normalized.includes(token));
+      const tokens = buildTopicMatchTokens(topic);
+      return tokens.some((token) => topicTokenMatches(normalized, token));
     });
 
     for (const [index, topic] of matches.entries()) {
@@ -739,7 +953,11 @@ export class FeedService {
     }
   }
 
-  private async insertTopicAndMarketLinks(newsItemId: string, topicId: string, index: number) {
+  private async insertTopicAndMarketLinks(
+    newsItemId: string,
+    topicId: string,
+    index: number,
+  ) {
     await this.db.query(
       `
         INSERT INTO news_item_topics (
@@ -747,7 +965,13 @@ export class FeedService {
         ) VALUES ($1, $2, $3, $4, $5)
         ON CONFLICT (news_item_id, topic_id) DO NOTHING
       `,
-      [createStableId("nit", `${newsItemId}:${topicId}`), newsItemId, topicId, index === 0 ? 1 : 0.75, index === 0]
+      [
+        createStableId("nit", `${newsItemId}:${topicId}`),
+        newsItemId,
+        topicId,
+        index === 0 ? 1 : 0.75,
+        index === 0,
+      ],
     );
 
     const markets = await queryRows<{ market_id: string }>(
@@ -757,7 +981,7 @@ export class FeedService {
         FROM market_topics mt
         WHERE mt.topic_id = $1
       `,
-      [topicId]
+      [topicId],
     );
 
     for (const market of markets) {
@@ -768,17 +992,26 @@ export class FeedService {
           ) VALUES ($1, $2, $3, $4)
           ON CONFLICT (news_item_id, market_id) DO NOTHING
         `,
-        [createStableId("nim", `${newsItemId}:${market.market_id}`), newsItemId, market.market_id, index === 0 ? 1 : 0.7]
+        [
+          createStableId("nim", `${newsItemId}:${market.market_id}`),
+          newsItemId,
+          market.market_id,
+          index === 0 ? 1 : 0.7,
+        ],
       );
     }
   }
 
-  private async ensureSource(name: string, sourceType: string, baseUrl?: string | undefined) {
+  private async ensureSource(
+    name: string,
+    sourceType: string,
+    baseUrl?: string | undefined,
+  ) {
     const slug = slugify(name);
     const existing = await queryOne<{ id: string }>(
       this.db,
       "SELECT id FROM news_sources WHERE slug = $1 LIMIT 1",
-      [slug]
+      [slug],
     );
 
     if (existing) {
@@ -792,7 +1025,7 @@ export class FeedService {
         VALUES ($1, $2, $3, $4, $5, $6, $7)
         ON CONFLICT (slug) DO NOTHING
       `,
-      [id, slug, name, sourceType, baseUrl ?? null, true, 0.7]
+      [id, slug, name, sourceType, baseUrl ?? null, true, 0.7],
     );
 
     return id;
@@ -800,25 +1033,51 @@ export class FeedService {
 
   private async rebuildHotTopicSnapshots(categorySlug?: string) {
     const categories = categorySlug
-      ? ((await queryRows<CategoryRecord>(this.db, "SELECT id, slug, name FROM categories WHERE slug = $1 LIMIT 1", [
-          categorySlug
-        ])) as CategoryRecord[])
-      : ((await queryRows<CategoryRecord>(this.db, "SELECT id, slug, name FROM categories")) as CategoryRecord[]);
+      ? ((await queryRows<CategoryRecord>(
+          this.db,
+          "SELECT id, slug, name FROM categories WHERE slug = $1 LIMIT 1",
+          [categorySlug],
+        )) as CategoryRecord[])
+      : ((await queryRows<CategoryRecord>(
+          this.db,
+          "SELECT id, slug, name FROM categories",
+        )) as CategoryRecord[]);
 
     const now = new Date();
     const windowEnd = now.toISOString();
-    const windowStart = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
+    const windowStart = new Date(
+      now.getTime() - 24 * 60 * 60 * 1000,
+    ).toISOString();
 
     for (const category of categories) {
-      const scoredRows = await this.queryScoredHotTopicRows(category.id, windowStart, windowEnd);
-      const rankedTopicsWithRank = this.toRankedTopicCandidates(category, scoredRows);
+      const scoredRows = await this.queryScoredHotTopicRows(
+        category.id,
+        windowStart,
+        windowEnd,
+      );
+      const rankedTopicsWithRank = this.toRankedTopicCandidates(
+        category,
+        scoredRows,
+      );
 
-      await this.insertTopicMentionTimeseries(rankedTopicsWithRank, windowStart, windowEnd);
-      await this.insertHotTopicSnapshots(rankedTopicsWithRank, windowStart, windowEnd);
+      await this.insertTopicMentionTimeseries(
+        rankedTopicsWithRank,
+        windowStart,
+        windowEnd,
+      );
+      await this.insertHotTopicSnapshots(
+        rankedTopicsWithRank,
+        windowStart,
+        windowEnd,
+      );
     }
   }
 
-  private async queryScoredHotTopicRows(categoryId: string, windowStart: string, windowEnd: string) {
+  private async queryScoredHotTopicRows(
+    categoryId: string,
+    windowStart: string,
+    windowEnd: string,
+  ) {
     return queryRows<ScoredHotTopicRow>(
       this.db,
       `
@@ -901,20 +1160,25 @@ export class FeedService {
         FROM scored
         ORDER BY rank ASC
       `,
-      [categoryId, windowStart, windowEnd]
+      [categoryId, windowStart, windowEnd],
     );
   }
 
-  private toRankedTopicCandidates(category: CategoryRecord, rows: ScoredHotTopicRow[]): RankedTopicCandidate[] {
+  private toRankedTopicCandidates(
+    category: CategoryRecord,
+    rows: ScoredHotTopicRow[],
+  ): RankedTopicCandidate[] {
     return rows.map((row) => ({
       topic: {
         id: row.topic_id,
         slug: row.topic_slug,
-        name: row.topic_name
+        name: row.topic_name,
       },
       category,
       mentions_count: this.toNumber(row.mentions_count),
-      previous_mentions_count: this.toNullableNumber(row.previous_mentions_count),
+      previous_mentions_count: this.toNullableNumber(
+        row.previous_mentions_count,
+      ),
       mentions_delta: this.toNumber(row.mentions_delta),
       mentions_delta_pct: this.toNullableNumber(row.mentions_delta_pct),
       unique_sources_count: this.toNumber(row.unique_sources_count),
@@ -922,11 +1186,15 @@ export class FeedService {
       weighted_mentions_score: this.toNumber(row.weighted_mentions_score),
       heat_score: this.toNumber(row.heat_score),
       trend_direction: row.trend_direction,
-      rank: this.toNumber(row.rank)
+      rank: this.toNumber(row.rank),
     }));
   }
 
-  private async insertTopicMentionTimeseries(items: RankedTopicCandidate[], windowStart: string, windowEnd: string) {
+  private async insertTopicMentionTimeseries(
+    items: RankedTopicCandidate[],
+    windowStart: string,
+    windowEnd: string,
+  ) {
     if (items.length === 0) {
       return;
     }
@@ -944,7 +1212,7 @@ export class FeedService {
         item.previous_mentions_count,
         item.unique_sources_count,
         item.breaking_news_count,
-        item.weighted_mentions_score
+        item.weighted_mentions_score,
       );
 
       return `($${index + 1}, $${index + 2}, $${index + 3}, $${index + 4}, $${index + 5}, $${index + 6}, $${index + 7}, $${index + 8}, $${index + 9}, $${index + 10}, now(), now())`;
@@ -965,11 +1233,15 @@ export class FeedService {
           weighted_mentions_score = EXCLUDED.weighted_mentions_score,
           updated_at = now()
       `,
-      params
+      params,
     );
   }
 
-  private async insertHotTopicSnapshots(items: RankedTopicCandidate[], windowStart: string, windowEnd: string) {
+  private async insertHotTopicSnapshots(
+    items: RankedTopicCandidate[],
+    windowStart: string,
+    windowEnd: string,
+  ) {
     if (items.length === 0) {
       return;
     }
@@ -992,7 +1264,7 @@ export class FeedService {
         item.breaking_news_count,
         item.heat_score,
         item.trend_direction,
-        item.rank
+        item.rank,
       );
 
       return `($${index + 1}, $${index + 2}, $${index + 3}, $${index + 4}, $${index + 5}, $${index + 6}, $${index + 7}, $${index + 8}, $${index + 9}, $${index + 10}, $${index + 11}, $${index + 12}, $${index + 13}, $${index + 14}, $${index + 15}, now(), now())`;
@@ -1019,7 +1291,7 @@ export class FeedService {
           rank = EXCLUDED.rank,
           updated_at = now()
       `,
-      params
+      params,
     );
   }
 
@@ -1041,8 +1313,51 @@ export class FeedService {
     try {
       await operation();
     } catch (error) {
-      this.logger?.error({ err: error, context }, "Feed refresh operation failed.");
+      this.logger?.error(
+        { err: error, context },
+        "Feed refresh operation failed.",
+      );
       return;
     }
   }
+}
+
+function buildTopicMatchTokens(topic: TopicSeedRow, hinted: string[] = []) {
+  return [
+    topic.slug.replace(/-/g, " "),
+    topic.name.toLowerCase(),
+    ...(topicSearchAliases[topic.slug] ?? []),
+    ...hinted,
+  ].filter(
+    (token, index, items) => token.length > 1 && items.indexOf(token) === index,
+  );
+}
+
+function normalizeTopicSearchText(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function topicTokenMatches(normalizedText: string, rawToken: string) {
+  const token = normalizeTopicSearchText(rawToken);
+  if (token.length < 2) {
+    return false;
+  }
+
+  if (token.includes(" ")) {
+    return normalizedText.includes(token);
+  }
+
+  if (token.length <= 3) {
+    return new RegExp(`\\b${escapeRegex(token)}\\b`, "i").test(normalizedText);
+  }
+
+  return normalizedText.includes(token);
+}
+
+function escapeRegex(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

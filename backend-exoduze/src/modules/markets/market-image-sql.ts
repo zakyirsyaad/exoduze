@@ -45,70 +45,29 @@ export function marketImageLateralSql(marketAlias = "m") {
           ni.image_uri,
           ns.slug AS source_slug,
           ns.name AS source_name,
-          0 AS priority,
+          EXISTS (
+            SELECT 1
+            FROM market_topics mt
+            JOIN news_item_topics nit ON nit.topic_id = mt.topic_id
+            WHERE mt.market_id = ${marketAlias}.id
+              AND mt.is_primary = true
+              AND nit.news_item_id = ni.id
+            LIMIT 1
+          ) AS matches_primary_topic,
           COALESCE(nim.relevance_score, 0)::numeric AS relevance_score,
+          nim.created_at,
           ni.published_at
         FROM news_item_markets nim
         JOIN news_items ni ON ni.id = nim.news_item_id
         JOIN news_sources ns ON ns.id = ni.source_id
         WHERE nim.market_id = ${marketAlias}.id
-
-        UNION ALL
-
-        SELECT
-          ni.image_uri,
-          ns.slug AS source_slug,
-          ns.name AS source_name,
-          1 AS priority,
-          0::numeric AS relevance_score,
-          ni.published_at
-        FROM news_items ni
-        JOIN news_sources ns ON ns.id = ni.source_id
-        WHERE ni.category_id = ${marketAlias}.category_id
-          AND EXISTS (
-            SELECT 1
-            FROM market_topics mt
-            JOIN news_item_topics nit ON nit.topic_id = mt.topic_id
-            WHERE mt.market_id = ${marketAlias}.id
-              AND nit.news_item_id = ni.id
-            LIMIT 1
-          )
-
-        UNION ALL
-
-        SELECT
-          ni.image_uri,
-          ns.slug AS source_slug,
-          ns.name AS source_name,
-          2 AS priority,
-          0::numeric AS relevance_score,
-          ni.published_at
-        FROM news_items ni
-        JOIN news_sources ns ON ns.id = ni.source_id
-        WHERE EXISTS (
-          SELECT 1
-          FROM market_topics mt
-          JOIN news_item_topics nit ON nit.topic_id = mt.topic_id
-          WHERE mt.market_id = ${marketAlias}.id
-            AND nit.news_item_id = ni.id
-          LIMIT 1
-        )
-
-        UNION ALL
-
-        SELECT
-          ni.image_uri,
-          ns.slug AS source_slug,
-          ns.name AS source_name,
-          3 AS priority,
-          0::numeric AS relevance_score,
-          ni.published_at
-        FROM news_items ni
-        JOIN news_sources ns ON ns.id = ni.source_id
-        WHERE ni.category_id = ${marketAlias}.category_id
       ) candidate
       WHERE ${usableImageWhereSql("candidate.image_uri", "candidate.source_slug", "candidate.source_name")}
-      ORDER BY candidate.priority ASC, candidate.relevance_score DESC, candidate.published_at DESC
+      ORDER BY
+        candidate.matches_primary_topic DESC,
+        candidate.relevance_score DESC,
+        candidate.created_at ASC,
+        candidate.published_at DESC
       LIMIT 1
     ) market_image ON true
   `;
