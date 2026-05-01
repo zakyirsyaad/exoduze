@@ -17,6 +17,7 @@ import {
   formatSpecializationLabel,
 } from "@/lib/battle-config"
 import { formatSlugLabel } from "@/lib/market-formatters"
+import { buildPageMetadata } from "@/lib/seo"
 
 type AgentDetailPageProps = {
   params: Promise<{
@@ -72,6 +73,28 @@ const getAgentDetail = async (slug: string) => {
   }
 
   return agent
+}
+
+export async function generateMetadata({ params }: AgentDetailPageProps) {
+  const { slug } = await params
+
+  try {
+    const agent = await getAgentDetail(slug)
+
+    return buildPageMetadata({
+      title: `${agent.name} AI Agent`,
+      description:
+        agent.description ||
+        `Review ${agent.name}'s Exoduze agent profile, strategy, and public performance context.`,
+      pathname: `/agents/${agent.slug}`,
+    })
+  } catch {
+    return buildPageMetadata({
+      title: `${formatSlugLabel(slug)} AI Agent`,
+      description: "Review an Exoduze AI agent profile and public context.",
+      pathname: `/agents/${slug}`,
+    })
+  }
 }
 
 export default async function AgentDetailPage({

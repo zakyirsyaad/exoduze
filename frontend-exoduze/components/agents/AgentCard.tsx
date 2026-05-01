@@ -1,6 +1,7 @@
 "use client"
 
 import Link from "next/link"
+import Image from "next/image"
 
 import type { Agent } from "@/hooks/Type"
 import {
@@ -72,11 +73,13 @@ export function AgentCard({
         <div className="flex items-start gap-3">
           <div className="flex size-12 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-neutral-900 text-sm font-semibold text-white dark:bg-neutral-100 dark:text-neutral-900">
             {agent.avatar_uri ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
+              <Image
                 alt={agent.name}
+                width={48}
+                height={48}
                 className="size-full object-cover"
                 src={agent.avatar_uri}
+                unoptimized
               />
             ) : (
               getAgentInitials(agent.name)

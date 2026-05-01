@@ -124,7 +124,7 @@ export function rebalanceWeights(
   const clampedValue = clamp(Math.round(nextValue), 0, 100)
   const nextWeights = { ...weights, [changedKey]: clampedValue }
   const otherKeys = WEIGHT_KEYS.filter((key) => key !== changedKey)
-  let remaining = 100 - clampedValue
+  const remaining = 100 - clampedValue
   const currentOtherTotal = otherKeys.reduce(
     (total, key) => total + weights[key],
     0

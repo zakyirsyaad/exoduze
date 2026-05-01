@@ -35,6 +35,7 @@ const AMBIGUOUS_TRANSACTION_SUBMISSION_MESSAGE_PATTERNS = [
   "the wallet did not return",
   "the provided transaction plan failed to execute",
   "solana transaction failed. check your wallet, token balance, rpc cluster, and on-chain market configuration.",
+  "something went wrong while processing the request",
   "unable to stake and join",
   "unable to open position",
 ] as const

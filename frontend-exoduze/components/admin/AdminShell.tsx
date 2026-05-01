@@ -37,14 +37,14 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
   const auth = useAuth()
 
   return (
-    <main className="mx-4 space-y-6 py-10 md:mx-10 xl:mx-20">
+    <main className="mx-auto w-full max-w-[1600px] space-y-6 px-4 py-10 sm:px-6 lg:px-10 xl:px-20">
       <section className="overflow-hidden rounded-[2rem] bg-gradient-to-br from-amber-50 via-white to-emerald-50 p-6 ring-1 ring-black/5 dark:from-amber-500/10 dark:via-neutral-950 dark:to-emerald-500/10 dark:ring-white/10">
         <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
           <div className="max-w-3xl">
             <p className="text-xs font-semibold tracking-[0.3em] text-amber-700 uppercase dark:text-amber-300">
               Exoduze Admin
             </p>
-            <h1 className="mt-3 text-4xl font-semibold tracking-tight md:text-5xl">
+            <h1 className="mt-3 text-3xl font-semibold tracking-tight md:text-5xl">
               Dedicated control surfaces for markets, catalog, disputes, and
               automation.
             </h1>

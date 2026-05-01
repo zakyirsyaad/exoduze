@@ -17,7 +17,7 @@ import {
 } from "@/components/ui/card"
 import { useAuth } from "@/hooks/useAuth"
 import type { MarketAgent, MarketDetail } from "@/hooks/Type"
-import { apiFetch } from "@/lib/api"
+import { ApiError, apiFetch } from "@/lib/api"
 import { formatDateTimeForTimeZone } from "@/lib/time-formatters"
 import {
   formatCurrency,
@@ -28,6 +28,8 @@ type ResolutionPanelProps = {
   market: MarketDetail
   agents: MarketAgent[]
 }
+
+const EMPTY_TOP_RANKED_MARKET_AGENT_IDS: string[] = []
 
 export function ResolutionPanel({ market, agents }: ResolutionPanelProps) {
   const auth = useAuth()
@@ -45,7 +47,11 @@ export function ResolutionPanel({ market, agents }: ResolutionPanelProps) {
     resolution.dispute_deadline &&
     Date.parse(resolution.dispute_deadline) > nowMs
   const topRankedAgents = React.useMemo(() => {
-    if (!settlementSummary?.top_ranked_market_agent_ids.length) {
+    const topRankedMarketAgentIds =
+      settlementSummary?.top_ranked_market_agent_ids ??
+      EMPTY_TOP_RANKED_MARKET_AGENT_IDS
+
+    if (!topRankedMarketAgentIds.length) {
       return []
     }
 
@@ -56,7 +62,7 @@ export function ResolutionPanel({ market, agents }: ResolutionPanelProps) {
       ])
     )
 
-    return settlementSummary.top_ranked_market_agent_ids.map(
+    return topRankedMarketAgentIds.map(
       (marketAgentId) => ({
         id: marketAgentId,
         name: agentNameByMarketAgentId.get(marketAgentId) ?? "AI Agent",
@@ -94,9 +100,7 @@ export function ResolutionPanel({ market, agents }: ResolutionPanelProps) {
       setReason("")
       router.refresh()
     } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Unable to dispute resolution"
-      )
+      toast.error(getDisputeErrorMessage(error))
     } finally {
       setSubmitting(false)
     }
@@ -257,7 +261,11 @@ export function ResolutionPanel({ market, agents }: ResolutionPanelProps) {
 
         {canDispute ? (
           <div className="grid gap-3">
+            <label htmlFor="resolution-dispute-reason" className="text-sm font-medium">
+              Dispute reason
+            </label>
             <textarea
+              id="resolution-dispute-reason"
               value={reason}
               onChange={(event) => setReason(event.target.value)}
               className="min-h-24 rounded-md border border-input bg-input/20 p-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30 dark:bg-input/30"
@@ -269,7 +277,7 @@ export function ResolutionPanel({ market, agents }: ResolutionPanelProps) {
                 !auth.isAuthenticated || submitting || reason.trim().length < 10
               }
             >
-              {submitting ? "Submitting..." : "Dispute Resolution"}
+              {submitting ? "Submitting dispute..." : "Submit dispute"}
             </Button>
           </div>
         ) : null}
@@ -299,4 +307,22 @@ function formatLabel(value?: string | null) {
 
 function formatBps(value: number) {
   return `${(value / 100).toFixed(value % 100 === 0 ? 0 : 2)}%`
+}
+
+function getDisputeErrorMessage(error: unknown) {
+  if (error instanceof ApiError) {
+    if (error.status === 401) {
+      return "Connect and sign your wallet before disputing a resolution."
+    }
+
+    if (error.status === 409) {
+      return "This resolution can no longer be disputed. Refresh the market for the latest status."
+    }
+
+    if (error.status === 404) {
+      return "This market resolution could not be found. Refresh the market and try again."
+    }
+  }
+
+  return "Unable to submit this dispute right now. Review the reason and try again."
 }

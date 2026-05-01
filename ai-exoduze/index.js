@@ -282,6 +282,22 @@ function validateDecisionResponse(value) {
   }
 
   const decision = value;
+  const allowedKeys = new Set([
+    "decision_side",
+    "confidence",
+    "reason_summary",
+    "key_signals",
+    "risk_factors",
+  ]);
+  const unexpectedKeys = Object.keys(decision).filter(
+    (key) => !allowedKeys.has(key),
+  );
+  if (unexpectedKeys.length) {
+    throw new Error(
+      `AI decision response contains unsupported fields: ${unexpectedKeys.join(", ")}.`,
+    );
+  }
+
   if (!["yes", "no", "abstain"].includes(decision.decision_side)) {
     throw new Error("AI decision_side must be yes, no, or abstain.");
   }

@@ -6,11 +6,18 @@ import { cn } from "@/lib/utils"
 import { NavbarResizable } from "@/components/NavbarResizable"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { Toaster } from "@/components/ui/sonner"
+import {
+  buildPageMetadata,
+  defaultDescription,
+  getSiteUrl,
+  siteName,
+} from "@/lib/seo"
 
 import "@solana/wallet-adapter-react-ui/styles.css"
 import "./wallet-adapter-overrides.css"
 import Providers from "@/config/SolanaProvider"
 import { AuthProvider } from "@/hooks/useAuth"
+import type { Metadata } from "next"
 
 const inter = Inter({ subsets: ["latin"], variable: "--font-sans" })
 
@@ -18,6 +25,20 @@ const fontMono = Geist_Mono({
   subsets: ["latin"],
   variable: "--font-mono",
 })
+
+export const metadata: Metadata = {
+  ...buildPageMetadata(),
+  metadataBase: getSiteUrl(),
+  applicationName: siteName,
+  title: {
+    default: siteName,
+    template: `%s | ${siteName}`,
+  },
+  description: defaultDescription,
+  appleWebApp: {
+    title: siteName,
+  },
+}
 
 export default function RootLayout({
   children,

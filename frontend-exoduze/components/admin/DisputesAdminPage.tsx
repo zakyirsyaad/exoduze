@@ -116,8 +116,12 @@ export function DisputesAdminPage() {
                 </Button>
               )
             )}
-            <Button variant="outline" onClick={() => void loadDisputes()}>
-              Refresh
+            <Button
+              variant="outline"
+              onClick={() => void loadDisputes()}
+              disabled={loading}
+            >
+              {loading ? "Refreshing..." : "Refresh"}
             </Button>
           </CardContent>
         </Card>
@@ -144,7 +148,8 @@ export function DisputesAdminPage() {
             <CardHeader>
               <CardTitle>No {formatStatus(status)} disputes</CardTitle>
               <CardDescription>
-                There are no disputes in this state right now.
+                There are no disputes in this state right now. Open disputes
+                will appear here after users challenge a proposed resolution.
               </CardDescription>
             </CardHeader>
           </Card>
@@ -216,21 +221,21 @@ export function DisputesAdminPage() {
                         onClick={() => void handleAccept(dispute.id, "YES")}
                         disabled={working}
                       >
-                        Finalize YES
+                        {working ? "Finalizing..." : "Finalize YES"}
                       </Button>
                       <Button
                         variant="outline"
                         onClick={() => void handleAccept(dispute.id, "NO")}
                         disabled={working}
                       >
-                        Finalize NO
+                        {working ? "Finalizing..." : "Finalize NO"}
                       </Button>
                       <Button
                         variant="destructive"
                         onClick={() => void handleReject(dispute.id)}
                         disabled={working}
                       >
-                        Keep Oracle Result
+                        {working ? "Updating..." : "Keep Oracle Result"}
                       </Button>
                     </>
                   ) : null}

@@ -12,10 +12,12 @@ import {
 } from "@/components/ui/card"
 import type { CategoryPageResponse } from "@/hooks/Type"
 import {
+  formatSlugLabel,
   formatMarketEndsIn,
   formatMarketLiquidity,
   formatMarketStatusLabel,
 } from "@/lib/market-formatters"
+import { buildPageMetadata } from "@/lib/seo"
 
 type CategoryPageProps = {
   params: Promise<{
@@ -49,13 +51,36 @@ const getCategoryPage = async (categorySlug: string) => {
   return (await response.json()) as CategoryPageResponse
 }
 
+export async function generateMetadata({ params }: CategoryPageProps) {
+  const { categories: categorySlug } = await params
+
+  try {
+    const categoryResponse = await getCategoryPage(categorySlug)
+    const { category } = categoryResponse.data
+
+    return buildPageMetadata({
+      title: `${category.name} Markets`,
+      description:
+        category.description ??
+        `Browse Exoduze prediction markets in ${category.name}.`,
+      pathname: `/${category.slug}`,
+    })
+  } catch {
+    return buildPageMetadata({
+      title: `${formatSlugLabel(categorySlug)} Markets`,
+      description: "Browse Exoduze prediction markets by category.",
+      pathname: `/${categorySlug}`,
+    })
+  }
+}
+
 export default async function CategoryPage({ params }: CategoryPageProps) {
   const { categories: categorySlug } = await params
   const categoryResponse = await getCategoryPage(categorySlug)
   const { category, topics, markets } = categoryResponse.data
 
   return (
-    <main className="mx-4 space-y-8 py-10 md:mx-10 xl:mx-20">
+    <main className="mx-auto w-full max-w-[1600px] space-y-8 px-4 py-10 sm:px-6 lg:px-10 xl:px-20">
       <Link
         href="/"
         className="inline-flex text-sm font-medium text-neutral-600 transition hover:text-neutral-950 dark:text-neutral-400 dark:hover:text-neutral-50"

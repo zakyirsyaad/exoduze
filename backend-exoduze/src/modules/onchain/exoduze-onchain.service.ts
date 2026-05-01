@@ -81,12 +81,43 @@ type UpdateTreasuryAuthorityResult = OnchainConfigSummary & {
   tx_sig: string | null;
 };
 
+function hasToBase58(value: unknown): value is { toBase58: () => string } {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    "toBase58" in value &&
+    typeof (value as { toBase58?: unknown }).toBase58 === "function"
+  );
+}
+
+function publicKeyLikeToString(value: unknown) {
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (hasToBase58(value)) {
+    return value.toBase58();
+  }
+
+  return null;
+}
+
+function isString(value: string | null): value is string {
+  return value !== null;
+}
+
 export type OnchainSignatureStatus = {
   confirmation_status: string | null;
   confirmed: boolean;
   failed: boolean;
   found: boolean;
   slot: number | null;
+};
+
+export type OnchainTransactionSummary = {
+  account_keys: string[];
+  program_ids: string[];
+  signer_keys: string[];
 };
 
 export type OnchainPositionAccount = {
@@ -99,14 +130,16 @@ export type OnchainPositionAccount = {
   user: string;
 };
 
-type ProgramRole = "admin" | "oracle";
+type ProgramRole = "admin" | "oracle" | "readonly";
 
 export class ExoduzeOnchainService {
   private readonly connection: Connection;
   private adminProgram: any | null = null;
   private oracleProgram: any | null = null;
+  private readonlyProgram: any | null = null;
   private adminWallet: anchor.Wallet | null = null;
   private oracleWallet: anchor.Wallet | null = null;
+  private readonlyWallet: anchor.Wallet | null = null;
 
   constructor(private readonly env: Env) {
     this.connection = new Connection(env.SOLANA_RPC_URL, "confirmed");
@@ -290,6 +323,11 @@ export class ExoduzeOnchainService {
     return this.toConfigSummary(configState.configPda, configState.configAccount);
   }
 
+  async checkRpcAvailability(): Promise<void> {
+    this.programId;
+    await this.connection.getLatestBlockhash("confirmed");
+  }
+
   async updateTreasuryAuthority(
     input: UpdateTreasuryAuthorityInput
   ): Promise<UpdateTreasuryAuthorityResult> {
@@ -360,6 +398,50 @@ export class ExoduzeOnchainService {
       failed: value.err !== null,
       found: true,
       slot: value.slot ?? null
+    };
+  }
+
+  async getTransactionSummary(
+    signature: string,
+  ): Promise<OnchainTransactionSummary | null> {
+    const transaction = await this.connection.getTransaction(signature, {
+      commitment: "confirmed",
+      maxSupportedTransactionVersion: 0,
+    });
+
+    if (!transaction || transaction.meta?.err) {
+      return null;
+    }
+
+    const message = transaction.transaction.message as unknown as Record<string, unknown>;
+    const accountKeys = this.getTransactionAccountKeys(
+      message,
+      transaction.meta?.loadedAddresses,
+    );
+    const header = message.header as { numRequiredSignatures?: number } | undefined;
+    const signerCount = header?.numRequiredSignatures ?? 0;
+    const instructions = this.getTransactionInstructions(message);
+    const programIds = new Set<string>();
+
+    for (const instruction of instructions) {
+      const programId =
+        typeof instruction.programId === "string"
+          ? instruction.programId
+          : hasToBase58(instruction.programId)
+            ? instruction.programId.toBase58()
+            : typeof instruction.programIdIndex === "number"
+              ? accountKeys[instruction.programIdIndex]
+              : null;
+
+      if (programId) {
+        programIds.add(programId);
+      }
+    }
+
+    return {
+      account_keys: accountKeys,
+      program_ids: [...programIds],
+      signer_keys: accountKeys.slice(0, signerCount),
     };
   }
 
@@ -437,7 +519,7 @@ export class ExoduzeOnchainService {
   }
 
   async getPosition(accountAddress: string): Promise<OnchainPositionAccount | null> {
-    const program = this.getProgram("admin");
+    const program = this.getProgram("readonly");
     const publicKey = this.parsePublicKey(accountAddress, "accountAddress");
     const accountInfo = await this.connection.getAccountInfo(publicKey, "confirmed");
 
@@ -495,6 +577,14 @@ export class ExoduzeOnchainService {
       return this.adminProgram;
     }
 
+    if (role === "readonly") {
+      if (!this.readonlyProgram) {
+        this.readonlyProgram = this.createProgramForRole(role);
+      }
+
+      return this.readonlyProgram;
+    }
+
     if (!this.oracleProgram) {
       this.oracleProgram = this.createProgramForRole(role);
     }
@@ -511,6 +601,14 @@ export class ExoduzeOnchainService {
   }
 
   private getWallet(role: ProgramRole): anchor.Wallet {
+    if (role === "readonly") {
+      if (!this.readonlyWallet) {
+        this.readonlyWallet = new anchor.Wallet(Keypair.generate());
+      }
+
+      return this.readonlyWallet;
+    }
+
     if (role === "admin") {
       if (!this.adminWallet) {
         this.adminWallet = this.loadWallet(
@@ -543,8 +641,24 @@ export class ExoduzeOnchainService {
       throw new HttpError(500, errorCode, `${envName} must point to the required on-chain keypair.`);
     }
 
-    const secret = JSON.parse(readFileSync(this.expandHome(keypairPath), "utf8")) as number[];
-    return new anchor.Wallet(Keypair.fromSecretKey(Uint8Array.from(secret)));
+    try {
+      const secret = JSON.parse(readFileSync(this.expandHome(keypairPath), "utf8")) as unknown;
+
+      if (
+        !Array.isArray(secret) ||
+        !secret.every((value) => Number.isInteger(value))
+      ) {
+        throw new Error("Keypair file must contain a JSON integer array.");
+      }
+
+      return new anchor.Wallet(Keypair.fromSecretKey(Uint8Array.from(secret)));
+    } catch {
+      throw new HttpError(
+        500,
+        errorCode,
+        `${envName} must point to a readable Solana keypair JSON file.`
+      );
+    }
   }
 
   private parsePublicKey(value: string | null | undefined, name: string): PublicKey {
@@ -703,6 +817,95 @@ export class ExoduzeOnchainService {
     }
 
     throw new HttpError(500, "ONCHAIN_CONFIG_INVALID", `${field} must be boolean.`);
+  }
+
+  private getTransactionAccountKeys(
+    message: Record<string, unknown>,
+    loadedAddresses: unknown,
+  ): string[] {
+    const getAccountKeys = message.getAccountKeys;
+
+    if (typeof getAccountKeys === "function") {
+      const keys = getAccountKeys.call(message, {
+        accountKeysFromLookups: loadedAddresses,
+      });
+
+      if (Array.isArray(keys)) {
+        return keys.map(publicKeyLikeToString).filter(isString);
+      }
+
+      if (keys && typeof keys === "object") {
+        const keyRecord = keys as Record<string, unknown>;
+        if (
+          typeof keyRecord.length === "number" &&
+          typeof keyRecord.get === "function"
+        ) {
+          const getKey = keyRecord.get as (index: number) => unknown;
+          return Array.from({ length: keyRecord.length }, (_, index) =>
+            publicKeyLikeToString(getKey(index)),
+          ).filter(isString);
+        }
+
+        const segments = [
+          keyRecord.staticAccountKeys,
+          keyRecord.accountKeysFromLookups,
+          keyRecord.writable,
+          keyRecord.readonly,
+        ];
+        const flattened = segments.flatMap((segment) =>
+          Array.isArray(segment) ? segment : [],
+        );
+        if (flattened.length) {
+          return flattened.map(publicKeyLikeToString).filter(isString);
+        }
+      }
+    }
+
+    const accountKeys = message.accountKeys;
+    if (Array.isArray(accountKeys)) {
+      return accountKeys.map(publicKeyLikeToString).filter(isString);
+    }
+
+    const staticAccountKeys = message.staticAccountKeys;
+    if (Array.isArray(staticAccountKeys)) {
+      const loadedAddressRecord =
+        loadedAddresses && typeof loadedAddresses === "object"
+          ? (loadedAddresses as Record<string, unknown>)
+          : {};
+      return [
+        ...staticAccountKeys,
+        ...(Array.isArray(loadedAddressRecord.writable)
+          ? loadedAddressRecord.writable
+          : []),
+        ...(Array.isArray(loadedAddressRecord.readonly)
+          ? loadedAddressRecord.readonly
+          : []),
+      ]
+        .map(publicKeyLikeToString)
+        .filter(isString);
+    }
+
+    return [];
+  }
+
+  private getTransactionInstructions(message: Record<string, unknown>) {
+    const compiledInstructions = message.compiledInstructions;
+    if (Array.isArray(compiledInstructions)) {
+      return compiledInstructions as Array<{
+        programId?: unknown;
+        programIdIndex?: number;
+      }>;
+    }
+
+    const instructions = message.instructions;
+    if (Array.isArray(instructions)) {
+      return instructions as Array<{
+        programId?: unknown;
+        programIdIndex?: number;
+      }>;
+    }
+
+    return [];
   }
 
   private normalizeSide(value: unknown): "YES" | "NO" | null {

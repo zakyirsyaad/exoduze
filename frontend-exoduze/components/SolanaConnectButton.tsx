@@ -393,57 +393,55 @@ function ConnectedWalletView({
 }) {
   return (
     <section className="flex items-center gap-3">
-      <div>
-        <div className="flex items-center gap-1">
-          <p className="font-medium">{truncateAddress(address)}</p>
-
-          {isAdmin ? (
-            <Badge variant="secondary" className="rounded">
-              Admin
-            </Badge>
-          ) : null}
-        </div>
-
-        {isConnectedAuthenticatedWallet ? (
-          <div className="grid grid-cols-2">
-            <p className="font-bold">
-              {formatUsdcBalance(usdcBalance)}{" "}
-              <span className="text-sm font-normal">USDC</span>
-            </p>
-            <p className="font-bold">
-              {formatSolBalance(solBalance)}{" "}
-              <span className="text-sm font-normal">SOL</span>
-            </p>
-          </div>
-        ) : null}
-      </div>
-      <div>
-        {needsSignature ? (
-          <Button
-            type="button"
-            variant="default"
-            disabled={authLoading || flowStep === "signing"}
-            onClick={onSignIn}
-            size={"icon-lg"}
-          >
-            {authLoading || flowStep === "signing"
-              ? "Waiting signature..."
-              : "Sign message"}
-          </Button>
-        ) : null}
-
+      {needsSignature ? (
         <Button
           type="button"
-          variant="secondary"
-          size="icon"
-          disabled={isBusy}
-          onClick={onDisconnect}
-          aria-label="Disconnect wallet"
-          title="Disconnect wallet"
+          variant="default"
+          disabled={authLoading || flowStep === "signing"}
+          onClick={onSignIn}
         >
-          <HugeiconsIcon icon={LogoutSquare01Icon} />
+          {authLoading || flowStep === "signing"
+            ? "Waiting signature..."
+            : "Sign message"}
         </Button>
-      </div>
+      ) :
+        <div>
+          <div className="flex items-center gap-1">
+            <p className="font-medium">{truncateAddress(address)}</p>
+
+            {isAdmin ? (
+              <Badge variant="secondary" className="rounded">
+                Admin
+              </Badge>
+            ) : null}
+          </div>
+
+          {isConnectedAuthenticatedWallet ? (
+            <div className="grid grid-cols-2">
+              <p className="font-bold">
+                {formatUsdcBalance(usdcBalance)}{" "}
+                <span className="text-sm font-normal">USDC</span>
+              </p>
+              <p className="font-bold">
+                {formatSolBalance(solBalance)}{" "}
+                <span className="text-sm font-normal">SOL</span>
+              </p>
+            </div>
+          ) : null}
+        </div>
+      }
+
+      <Button
+        type="button"
+        variant="secondary"
+        size="icon-lg"
+        disabled={isBusy}
+        onClick={onDisconnect}
+        aria-label="Disconnect wallet"
+        title="Disconnect wallet"
+      >
+        <HugeiconsIcon icon={LogoutSquare01Icon} />
+      </Button>
     </section>
   )
 }

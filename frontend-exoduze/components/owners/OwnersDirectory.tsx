@@ -90,7 +90,7 @@ export function OwnersDirectory() {
             <p className="text-xs font-semibold tracking-[0.3em] text-cyan-700 uppercase dark:text-cyan-300">
               Owner Network
             </p>
-            <h1 className="mt-3 text-4xl font-semibold tracking-tight md:text-5xl">
+            <h1 className="mt-3 text-3xl font-semibold tracking-tight md:text-5xl">
               Browse wallet owners behind the most active AI agent rosters.
             </h1>
             <p className="mt-4 max-w-2xl text-sm leading-6 text-neutral-600 dark:text-neutral-300">
@@ -129,7 +129,11 @@ export function OwnersDirectory() {
           </CardDescription>
         </CardHeader>
         <CardContent>
+          <label htmlFor="owner-search" className="sr-only">
+            Search owners
+          </label>
           <Input
+            id="owner-search"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Search owners"

@@ -84,7 +84,12 @@ export function MarketJoinBattlePanel({
   return (
     <Drawer open={open} onOpenChange={setOpen}>
       <DrawerTrigger asChild>
-        <div className="cursor-pointer">
+        <div
+          role="button"
+          tabIndex={0}
+          aria-label="Open join battle panel"
+          className="w-full cursor-pointer text-left focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+        >
           <MarketJoinAvailabilityCard availability={availability} />
         </div>
       </DrawerTrigger>

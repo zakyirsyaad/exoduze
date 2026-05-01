@@ -30,7 +30,7 @@ export default function AllMarket() {
           ? marketSkeletonItems.map((_, idx) => (
               <article
                 key={`market-skeleton-${idx}`}
-                className="w-full max-w-[340px] rounded-xl border border-black/10 bg-white/80 p-6 dark:border-white/10 dark:bg-white/5"
+                className="w-full rounded-xl border border-black/10 bg-white/80 p-6 dark:border-white/10 dark:bg-white/5"
               >
                 <div className="space-y-4">
                   <div className="flex items-center justify-between gap-3">
@@ -71,8 +71,16 @@ export default function AllMarket() {
               </Link>
             ))}
       </section>
+      {!loading && !error && !markets.length ? (
+        <div className="rounded-md border border-dashed border-black/10 p-5 text-sm text-neutral-600 dark:border-white/10 dark:text-neutral-400">
+          No markets are published yet. Check back after the next market
+          generation cycle.
+        </div>
+      ) : null}
       {error && !markets.length ? (
-        <p className="text-sm text-red-500">Failed to load markets: {error}</p>
+        <div className="rounded-md border border-red-500/30 bg-red-500/5 p-5 text-sm text-red-700 dark:text-red-300">
+          Markets are temporarily unavailable. Try refreshing in a moment.
+        </div>
       ) : null}
     </div>
   )

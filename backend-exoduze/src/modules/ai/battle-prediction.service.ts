@@ -1,7 +1,14 @@
 import { createHash } from "node:crypto";
 
+import { z } from "zod";
+
 import type { Env } from "../../config/env.js";
-import { hashCanonicalJson } from "../../../../ai-exoduze/index.js";
+import {
+  AiDecisionService,
+  hashCanonicalJson,
+  type AiDecisionInput,
+  type AiDecisionRuntimeConfig,
+} from "../../../../ai-exoduze/index.js";
 import type {
   AgentSpecialization,
   BattleSignalWeights,
@@ -38,13 +45,27 @@ type BattlePredictionStrategyInput = BattleSignalWeights & {
   optionalInsight: string | null;
 };
 
-export type BattlePredictionJson = {
-  predictedValue: number | string;
-  direction: "bullish" | "bearish" | "neutral" | "yes" | "no";
-  confidence: number;
-  reasoningSummary: string;
-  riskNotes: string;
-};
+const battlePredictionJsonSchema = z
+  .object({
+    predictedValue: z.union([z.number().finite(), z.string().min(1).max(240)]),
+    direction: z.enum(["bullish", "bearish", "neutral", "yes", "no"]),
+    confidence: z.number().min(0).max(1),
+    reasoningSummary: z.string().min(1).max(1200),
+    riskNotes: z.string().min(1).max(1200),
+  })
+  .strict();
+
+const aiDecisionResponseSchema = z
+  .object({
+    decision_side: z.enum(["yes", "no", "abstain"]),
+    confidence: z.number().min(0).max(1),
+    reason_summary: z.string().min(1).max(1200),
+    key_signals: z.array(z.string().min(1).max(500)).max(8),
+    risk_factors: z.array(z.string().min(1).max(500)).max(8),
+  })
+  .strict();
+
+export type BattlePredictionJson = z.infer<typeof battlePredictionJsonSchema>;
 
 type BattlePredictionPrompt = {
   canonicalizationVersion: string;
@@ -102,10 +123,26 @@ const RISK_PROFILE_CONFIDENCE_BIAS: Record<RiskProfile, number> = {
   aggressive: 0.04,
 };
 
+type BattlePredictionProvider = "mock" | "openai";
+
 export class BattlePredictionService {
   constructor(private readonly env: Env) {}
 
-  generatePrediction(input: GenerateBattlePredictionInput): BattlePredictionResult {
+  async generatePrediction(
+    input: GenerateBattlePredictionInput,
+  ): Promise<BattlePredictionResult> {
+    const provider = this.resolvePredictionProvider();
+
+    if (provider === "openai") {
+      return this.generateOpenAiPrediction(input);
+    }
+
+    return this.generateMockPredictionResult(input);
+  }
+
+  private generateMockPredictionResult(
+    input: GenerateBattlePredictionInput,
+  ): BattlePredictionResult {
     const prompt = this.buildPrompt(input);
     const prediction = this.generateMockPrediction(input);
     const predictionHash = hashCanonicalJson(prediction);
@@ -125,6 +162,101 @@ export class BattlePredictionService {
         prompt_hash: prompt.promptHash,
         model: "exoduze-battle-mock-v1",
       }),
+    };
+  }
+
+  private async generateOpenAiPrediction(
+    input: GenerateBattlePredictionInput,
+  ): Promise<BattlePredictionResult> {
+    const aiDecisionService = new AiDecisionService(this.buildOpenAiRuntimeConfig());
+    const aiDecision = await aiDecisionService.generateDecision(
+      this.buildAiDecisionInput(input),
+    );
+    const decision = validateAiDecisionResponse(aiDecision.decision);
+    const prediction = validateBattlePredictionJson({
+      predictedValue:
+        decision.decision_side === "abstain" ? "abstain" : decision.decision_side,
+      direction: mapAiDecisionSideToBattleDirection(decision.decision_side),
+      confidence: decision.confidence,
+      reasoningSummary: decision.reason_summary,
+      riskNotes: decision.risk_factors.length
+        ? decision.risk_factors.join(" ")
+        : "The model did not return specific risk factors.",
+    });
+    const predictionHash = hashCanonicalJson(prediction);
+
+    return {
+      provider: aiDecision.provider,
+      model: aiDecision.model,
+      prediction,
+      predictionHash,
+      prompt: aiDecision.prompt,
+      keySignals: decision.key_signals,
+      riskFactors: decision.risk_factors,
+      reasonHash: hashCanonicalJson({
+        prediction,
+        prompt_hash: aiDecision.prompt.promptHash,
+        model: aiDecision.model,
+      }),
+    };
+  }
+
+  private buildOpenAiRuntimeConfig(): AiDecisionRuntimeConfig {
+    return {
+      AI_DECISION_PROVIDER: "openai",
+      AI_CANONICALIZATION_VERSION: this.env.AI_CANONICALIZATION_VERSION,
+      OPENAI_API_KEY: this.env.OPENAI_API_KEY,
+      OPENAI_BASE_URL: this.env.OPENAI_BASE_URL,
+      OPENAI_MODEL: this.env.OPENAI_MODEL,
+      OPENAI_DECISION_MAX_OUTPUT_TOKENS:
+        this.env.OPENAI_DECISION_MAX_OUTPUT_TOKENS,
+    };
+  }
+
+  private buildAiDecisionInput(
+    input: GenerateBattlePredictionInput,
+  ): AiDecisionInput {
+    return {
+      market: {
+        id: input.market.id,
+        slug: input.market.slug,
+        title: input.market.title,
+        shortDescription:
+          input.market.shortDescription || input.market.title,
+        description: input.market.description,
+        categorySlug: input.agent.specialization,
+        categoryName: formatPresetLabel(input.agent.specialization),
+        status: "open",
+        oracleSource: input.market.resolutionRule,
+        opensAt: input.market.startTime,
+        joinDeadlineAt: input.market.endTime,
+        decisionCutoffAt: input.market.endTime,
+        closesAt: input.market.endTime,
+        topics: input.agent.dataFocus.map((focus) => ({
+          slug: focus,
+          name: formatPresetLabel(focus),
+        })),
+      },
+      agent: {
+        id: input.agent.id,
+        slug: input.agent.id,
+        name: input.agent.name,
+        description: [
+          input.agent.description,
+          `Personality: ${input.agent.basePersonality}`,
+          `Base strategy: ${input.agent.baseStrategy}`,
+          `Risk profile: ${input.agent.riskProfile}`,
+          `Battle specialization: ${input.agent.specialization}`,
+        ].join("\n"),
+        categories: [
+          {
+            slug: input.agent.specialization,
+            name: formatPresetLabel(input.agent.specialization),
+          },
+        ],
+      },
+      userPrompt: buildBattleStrategyPrompt(input),
+      news: [],
     };
   }
 
@@ -236,14 +368,123 @@ export class BattlePredictionService {
     const predictedValue = Number(clampedProbability.toFixed(2));
     const dominantWeights = getDominantWeights(input.strategy);
 
-    return {
+    return validateBattlePredictionJson({
       predictedValue,
       direction,
       confidence: Number(confidence.toFixed(4)),
       reasoningSummary: `Mock battle prediction favors ${direction.toUpperCase()} because ${input.agent.name} leans on ${dominantWeights.join(", ")} under the ${formatPresetLabel(input.strategy.preset)} preset.`,
       riskNotes: `Deterministic placeholder output only. ${input.agent.riskProfile.charAt(0).toUpperCase()}${input.agent.riskProfile.slice(1)} risk profile and ${input.agent.specialization} specialization may overfit to limited structured inputs.`,
-    };
+    });
   }
+
+  private resolvePredictionProvider(): BattlePredictionProvider {
+    const provider = this.env.AI_DECISION_PROVIDER;
+
+    if (isProtectedRuntime()) {
+      const configuredProvider = process.env.AI_DECISION_PROVIDER?.trim();
+      if (!configuredProvider || provider !== "openai") {
+        throw new Error(
+          "AI_DECISION_PROVIDER must be explicitly set to openai for battle predictions in staging/production.",
+        );
+      }
+    }
+
+    if (provider === "openai") {
+      return "openai";
+    }
+
+    if (provider === "mock") {
+      if (!isLocalDevelopmentRuntime()) {
+        throw new Error(
+          "Mock battle predictions are only allowed in local/development/test runtimes.",
+        );
+      }
+
+      return "mock";
+    }
+
+    throw new Error(
+      "Battle predictions require AI_DECISION_PROVIDER=openai, or AI_DECISION_PROVIDER=mock in local/development/test.",
+    );
+  }
+}
+
+function validateAiDecisionResponse(value: unknown) {
+  return aiDecisionResponseSchema.parse(value);
+}
+
+function validateBattlePredictionJson(value: unknown): BattlePredictionJson {
+  return battlePredictionJsonSchema.parse(value);
+}
+
+function mapAiDecisionSideToBattleDirection(
+  value: z.infer<typeof aiDecisionResponseSchema>["decision_side"],
+): BattlePredictionJson["direction"] {
+  if (value === "yes" || value === "no") {
+    return value;
+  }
+
+  return "neutral";
+}
+
+function buildBattleStrategyPrompt(input: GenerateBattlePredictionInput) {
+  return [
+    "Battle prediction mode. Take the selected battle strategy into account before choosing a side.",
+    "",
+    "Agent strategy:",
+    `- Preset: ${input.strategy.preset}`,
+    `- Technical weight: ${input.strategy.technicalWeight}%`,
+    `- News weight: ${input.strategy.newsWeight}%`,
+    `- Sentiment weight: ${input.strategy.sentimentWeight}%`,
+    `- Macro weight: ${input.strategy.macroWeight}%`,
+    `- On-chain weight: ${input.strategy.onchainWeight}%`,
+    `- Optional insight: ${input.strategy.optionalInsight || "none"}`,
+    "",
+    "Market scoring:",
+    input.market.scoringMethod,
+    "",
+    "Prefer yes/no when the evidence supports a stakeable prediction. Use abstain only when the evidence is too weak or contradictory.",
+  ].join("\n");
+}
+
+function isProtectedRuntime() {
+  return [
+    process.env.APP_ENV,
+    process.env.NODE_ENV,
+    process.env.ENVIRONMENT,
+    process.env.DEPLOY_ENV,
+    process.env.VERCEL_ENV,
+  ].some((value) => {
+    const normalized = value?.trim().toLowerCase();
+    return (
+      normalized === "production" ||
+      normalized === "prod" ||
+      normalized === "staging" ||
+      normalized === "stage"
+    );
+  });
+}
+
+function isLocalDevelopmentRuntime() {
+  const values = [
+    process.env.APP_ENV,
+    process.env.NODE_ENV,
+    process.env.ENVIRONMENT,
+    process.env.DEPLOY_ENV,
+    process.env.VERCEL_ENV,
+  ].map((value) => value?.trim().toLowerCase()).filter(Boolean);
+
+  if (values.length === 0) {
+    return true;
+  }
+
+  return values.every(
+    (value) =>
+      value === "local" ||
+      value === "development" ||
+      value === "dev" ||
+      value === "test",
+  );
 }
 
 function buildKeySignals(strategy: BattlePredictionStrategyInput) {
@@ -319,7 +560,7 @@ function getQuestionWordingBias(text: string) {
     );
 }
 
-function formatPresetLabel(value: StrategyPreset) {
+function formatPresetLabel(value: string) {
   return value.replace(/_/g, " ");
 }
 

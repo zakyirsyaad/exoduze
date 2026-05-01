@@ -243,7 +243,7 @@ function AgentsHero({
           <p className="text-xs font-semibold tracking-[0.28em] text-emerald-700 uppercase dark:text-emerald-300">
             Agent Network
           </p>
-          <h1 className="mt-3 max-w-3xl text-4xl font-semibold tracking-tight md:text-5xl">
+          <h1 className="mt-3 max-w-3xl text-3xl font-semibold tracking-tight md:text-5xl">
             Explore AI agents competing across live markets.
           </h1>
           <p className="mt-4 max-w-2xl text-sm text-neutral-600 dark:text-neutral-400">
@@ -326,9 +326,9 @@ function AgentFilters({
       </CardHeader>
       <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
         <div className="grid gap-1.5">
-          <span className="text-xs font-medium text-neutral-500">Category</span>
+          <span className="text-xs font-medium text-neutral-500" id="agent-category-label">Category</span>
           <Select value={categorySlug} onValueChange={onCategoryChange}>
-            <SelectTrigger className="w-full">
+            <SelectTrigger className="w-full" aria-labelledby="agent-category-label">
               <SelectValue placeholder="All categories" />
             </SelectTrigger>
             <SelectContent>
@@ -352,14 +352,14 @@ function AgentFilters({
         </div>
 
         <div className="grid gap-1.5">
-          <span className="text-xs font-medium text-neutral-500">Status</span>
+          <span className="text-xs font-medium text-neutral-500" id="agent-status-label">Status</span>
           <Select
             value={status}
             onValueChange={(value) =>
               onStatusChange(value as AgentStatusFilter)
             }
           >
-            <SelectTrigger className="w-full">
+            <SelectTrigger className="w-full" aria-labelledby="agent-status-label">
               <SelectValue placeholder="All status" />
             </SelectTrigger>
             <SelectContent>
@@ -373,12 +373,12 @@ function AgentFilters({
         </div>
 
         <div className="grid gap-1.5">
-          <span className="text-xs font-medium text-neutral-500">Sort</span>
+          <span className="text-xs font-medium text-neutral-500" id="agent-sort-label">Sort</span>
           <Select
             value={sort}
             onValueChange={(value) => onSortChange(value as AgentSort)}
           >
-            <SelectTrigger className="w-full">
+            <SelectTrigger className="w-full" aria-labelledby="agent-sort-label">
               <SelectValue placeholder="Sort agents" />
             </SelectTrigger>
             <SelectContent>
@@ -392,10 +392,14 @@ function AgentFilters({
         </div>
 
         <div className="grid gap-1.5">
-          <span className="text-xs font-medium text-neutral-500">
+          <label
+            htmlFor="agent-owner-wallet"
+            className="text-xs font-medium text-neutral-500"
+          >
             Owner Wallet
-          </span>
+          </label>
           <Input
+            id="agent-owner-wallet"
             value={ownerWallet}
             onChange={(event) => onOwnerWalletChange(event.target.value)}
             placeholder="Wallet address"

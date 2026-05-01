@@ -291,6 +291,56 @@ test("settlement treats ABSTAIN and missing decision sides as losing stake", () 
   assert.equal(isWinningSettlementDecisionSide(null, "NO"), false);
 });
 
+test("backend settlement matches contract pure pro-rata payout when bonus is disabled", () => {
+  const plan = buildHybridSettlementPlan({
+    positions: [
+      {
+        payout_key: "wallet_a:agent_yes_a",
+        wallet_identity_id: "wallet_a",
+        market_agent_id: "agent_yes_a",
+        final_decision_side: "YES",
+        decision_confidence: 0.9,
+        decision_recorded_at: "2099-04-26T01:00:00.000Z",
+        stakeUnits: 30n,
+        position_count: 1,
+      },
+      {
+        payout_key: "wallet_b:agent_yes_b",
+        wallet_identity_id: "wallet_b",
+        market_agent_id: "agent_yes_b",
+        final_decision_side: "YES",
+        decision_confidence: 0.6,
+        decision_recorded_at: "2099-04-26T01:05:00.000Z",
+        stakeUnits: 20n,
+        position_count: 1,
+      },
+      {
+        payout_key: "wallet_c:agent_no",
+        wallet_identity_id: "wallet_c",
+        market_agent_id: "agent_no",
+        final_decision_side: "NO",
+        decision_confidence: 0.8,
+        decision_recorded_at: "2099-04-26T01:10:00.000Z",
+        stakeUnits: 50n,
+        position_count: 1,
+      },
+    ],
+    outcome: "YES",
+    topAgentBonusBps: 0,
+  });
+
+  const byKey = new Map(
+    plan.positions.map((position) => [position.payout_key, position]),
+  );
+
+  assert.equal(plan.total_stake_units, 100n);
+  assert.equal(plan.winning_stake_units, 50n);
+  assert.equal(plan.top_agent_bonus_pool_units, 0n);
+  assert.equal(byKey.get("wallet_a:agent_yes_a")?.gross_units, 60n);
+  assert.equal(byKey.get("wallet_b:agent_yes_b")?.gross_units, 40n);
+  assert.equal(byKey.get("wallet_c:agent_no")?.gross_units, 0n);
+});
+
 test("settlement bonus picks the highest-confidence winning AI", () => {
   const plan = buildHybridSettlementPlan({
     positions: [
@@ -542,6 +592,7 @@ test("topic snapshot helper detects dev seed snapshots", () => {
 
 test("active resolution statuses prevent duplicate proposals", () => {
   assert.equal(isActiveResolutionStatus("proposed"), true);
+  assert.equal(isActiveResolutionStatus("settling"), true);
   assert.equal(isActiveResolutionStatus("disputed"), true);
   assert.equal(isActiveResolutionStatus("finalized"), true);
   assert.equal(isActiveResolutionStatus("rejected"), false);

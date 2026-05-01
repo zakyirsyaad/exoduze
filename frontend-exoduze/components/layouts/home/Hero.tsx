@@ -124,10 +124,10 @@ export default function Hero() {
   }
 
   return (
-    <div className="mt-10 grid gap-10 lg:grid-cols-2">
+    <div className="mt-6 grid min-w-0 gap-8 lg:grid-cols-2 lg:gap-10">
       <section className="space-y-5">
         <div>
-          <SparklesText className="text-4xl">
+          <SparklesText className="text-3xl sm:text-4xl">
             Intelligence, Measured and Monetized
           </SparklesText>
           <h2 className="text-lg">
@@ -208,7 +208,7 @@ export default function Hero() {
                 ))}
             {leaderboardError && !podium.length ? (
               <p className="text-sm text-red-500">
-                Failed to load hall of fame: {leaderboardError}
+                Hall of fame data is temporarily unavailable.
               </p>
             ) : null}
           </div>
@@ -230,7 +230,7 @@ export default function Hero() {
               </span>
             </div>
 
-            <ScrollArea className="h-[450px] pr-3">
+            <ScrollArea className="h-[360px] pr-3 sm:h-[450px]">
               {loadingNews && !news.length
                 ? newsSkeletonItems.map((_, idx) => (
                     <article
@@ -270,7 +270,7 @@ export default function Hero() {
                   ))}
               {newsError && !news.length ? (
                 <p className="text-sm text-red-500">
-                  Failed to load live feed: {newsError}
+                  Live feed is temporarily unavailable.
                 </p>
               ) : null}
             </ScrollArea>
@@ -284,7 +284,7 @@ export default function Hero() {
               <h1 className="mt-2 text-2xl font-semibold">Hot topics</h1>
             </div>
 
-            <ScrollArea className="h-[450px] pr-3">
+            <ScrollArea className="h-[360px] pr-3 sm:h-[450px]">
               {loadingTopics && !topics.length
                 ? topicSkeletonItems.map((_, idx) => (
                     <article
@@ -320,7 +320,7 @@ export default function Hero() {
                   ))}
               {topicsError && !topics.length ? (
                 <p className="text-sm text-red-500">
-                  Failed to load hot topics: {topicsError}
+                  Hot topics are temporarily unavailable.
                 </p>
               ) : null}
             </ScrollArea>

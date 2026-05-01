@@ -9,6 +9,7 @@ import {
   slugify,
 } from "../../lib/ids.js";
 import { HttpError, isPgErrorCode } from "../../lib/http-error.js";
+import { writeAuditLog } from "../audit/audit-log.js";
 import type { ExoduzeOnchainService } from "../onchain/exoduze-onchain.service.js";
 import {
   marketImageLateralSql,
@@ -174,6 +175,42 @@ type MarketResolveInput = {
   submittedByWalletId?: string | null | undefined;
 };
 
+type AutomaticResolutionFinalizeInput = {
+  evidenceUri: string | null;
+  finalizedBy: string;
+  marketId: string;
+  outcome: MarketOutcome;
+  resolutionId: string;
+  resolvedAt: string;
+  submittedTxSig?: string | null | undefined;
+};
+
+type ResolutionDisputeActorInput = {
+  walletAddress: string;
+  walletIdentityId: string;
+};
+
+type ResolutionDisputeRow = {
+  id: string;
+  market_id: string;
+  market_slug: string;
+  market_title: string;
+  resolution_id: string;
+  proposed_outcome: MarketOutcome;
+  evidence_snapshot_id: string;
+  evidence_summary: string;
+  evidence_snapshot_generated_at: string | null;
+  dispute_deadline: string;
+  disputed_by: string;
+  reason: string;
+  status: string;
+  created_at: string;
+};
+
+type ServiceLogger = {
+  error?: (input: unknown, message?: string) => void;
+};
+
 type ManagedMarketRow = {
   id: string;
   slug: string;
@@ -239,6 +276,7 @@ export class MarketsService {
     private readonly db: AppDatabase,
     private readonly env: Env,
     private readonly onchainService?: ExoduzeOnchainService,
+    private readonly logger?: ServiceLogger,
   ) {}
 
   async listMarkets(query: ListMarketsQuery) {
@@ -761,6 +799,7 @@ export class MarketsService {
         FROM battle_entries be
         JOIN agents a ON a.id = be.agent_id
         WHERE be.market_id = $1
+          AND be.status IN ('locked', 'resolved', 'claimed')
         ORDER BY be.created_at DESC
       `,
       [market.id],
@@ -1665,7 +1704,7 @@ export class MarketsService {
           SELECT id, status
           FROM market_resolutions
           WHERE market_id = $1
-            AND status IN ('proposed', 'disputed')
+            AND status IN ('proposed', 'settling', 'disputed')
           ORDER BY proposed_at DESC, created_at DESC
           LIMIT 1
         `,
@@ -1678,7 +1717,7 @@ export class MarketsService {
           "MARKET_RESOLUTION_PROPOSAL_ACTIVE",
           activeAutomaticResolution.status === "disputed"
             ? "This market has an open dispute. Use the admin dispute endpoints to finalize it."
-            : "This market already has a proposed automatic resolution. Wait for the finalizer or resolve it through the dispute flow.",
+            : "This market already has an active automatic resolution. Wait for the finalizer or resolve it through the dispute flow.",
         );
       }
 
@@ -1693,6 +1732,434 @@ export class MarketsService {
           resolution_settlement: settlement,
         },
       };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async finalizeAutomaticResolution(input: AutomaticResolutionFinalizeInput) {
+    const client = await this.db.connect();
+
+    try {
+      await client.query("BEGIN");
+
+      const market = await this.requireManagedMarket(input.marketId, client);
+      await this.lockMarketRow(client, market.id);
+
+      const resolution = await queryOne<{
+        id: string;
+        status: string;
+        proposed_outcome: MarketOutcome;
+        finalized_outcome: MarketOutcome | null;
+        dispute_deadline: string;
+      }>(
+        client,
+        `
+          SELECT
+            id,
+            status,
+            proposed_outcome,
+            finalized_outcome,
+            dispute_deadline::text
+          FROM market_resolutions
+          WHERE id = $1 AND market_id = $2
+          FOR UPDATE
+        `,
+        [input.resolutionId, market.id],
+      );
+
+      if (!resolution) {
+        await client.query("ROLLBACK");
+        return { finalized: false, settlement: null };
+      }
+
+      if (["disputed", "finalized", "rejected"].includes(resolution.status)) {
+        await client.query("ROLLBACK");
+        return { finalized: false, settlement: null };
+      }
+
+      const finalizedOutcome = resolution.finalized_outcome ?? resolution.proposed_outcome;
+      if (finalizedOutcome !== input.outcome) {
+        throw new HttpError(
+          409,
+          "RESOLUTION_OUTCOME_MISMATCH",
+          "The finalized resolution outcome does not match the requested outcome.",
+        );
+      }
+
+      if (resolution.status === "proposed") {
+        if (Date.parse(resolution.dispute_deadline) > Date.parse(input.resolvedAt)) {
+          await client.query("ROLLBACK");
+          return { finalized: false, settlement: null };
+        }
+
+        const openDispute = await queryOne<{ id: string }>(
+          client,
+          `
+            SELECT id
+            FROM market_disputes
+            WHERE resolution_id = $1 AND status = 'open'
+            LIMIT 1
+          `,
+          [resolution.id],
+        );
+
+        if (openDispute) {
+          await client.query("ROLLBACK");
+          return { finalized: false, settlement: null };
+        }
+      } else if (resolution.status !== "settling") {
+        await client.query("ROLLBACK");
+        return { finalized: false, settlement: null };
+      }
+
+      const settlement = await this.settleMarketPayouts(client, market, {
+        outcome: input.outcome,
+        evidenceUri: input.evidenceUri,
+        submittedTxSig: input.submittedTxSig ?? null,
+        resolvedAt: input.resolvedAt,
+        submittedByWalletId: null,
+      });
+
+      const resolutionUpdate = await client.query(
+        `
+          UPDATE market_resolutions
+          SET
+            status = 'finalized',
+            finalized_outcome = $2,
+            finalized_at = $3,
+            finalized_by = $4,
+            updated_at = now()
+          WHERE id = $1
+            AND status IN ('proposed', 'settling')
+        `,
+        [resolution.id, input.outcome, input.resolvedAt, input.finalizedBy],
+      );
+
+      if (resolutionUpdate.rowCount !== 1) {
+        await client.query("ROLLBACK");
+        return { finalized: false, settlement: null };
+      }
+
+      await client.query("COMMIT");
+      return { finalized: true, settlement };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async createResolutionDispute(
+    marketIdOrSlug: string,
+    resolutionId: string,
+    input: ResolutionDisputeActorInput & { reason: string },
+  ) {
+    const reason = input.reason.trim();
+    if (reason.length < 10) {
+      throw new HttpError(
+        400,
+        "DISPUTE_REASON_TOO_SHORT",
+        "Dispute reason must be at least 10 characters.",
+      );
+    }
+
+    const now = new Date().toISOString();
+    const client = await this.db.connect();
+
+    try {
+      await client.query("BEGIN");
+
+      const market = await this.requireManagedMarket(marketIdOrSlug, client);
+      await this.lockMarketRow(client, market.id);
+
+      const resolution = await queryOne<{
+        id: string;
+        status: string;
+        dispute_deadline: string;
+      }>(
+        client,
+        `
+          SELECT id, status, dispute_deadline::text
+          FROM market_resolutions
+          WHERE id = $1 AND market_id = $2
+          FOR UPDATE
+        `,
+        [resolutionId, market.id],
+      );
+
+      if (!resolution) {
+        throw new HttpError(
+          404,
+          "RESOLUTION_NOT_FOUND",
+          `Resolution '${resolutionId}' was not found for this market.`,
+        );
+      }
+
+      if (resolution.status !== "proposed") {
+        throw new HttpError(
+          409,
+          "RESOLUTION_NOT_DISPUTABLE",
+          "Only proposed resolutions can be disputed.",
+        );
+      }
+
+      if (Date.parse(resolution.dispute_deadline) <= Date.now()) {
+        throw new HttpError(
+          409,
+          "RESOLUTION_DISPUTE_WINDOW_CLOSED",
+          "The dispute window has already closed.",
+        );
+      }
+
+      const existingOpenDispute = await queryOne<{ id: string }>(
+        client,
+        `
+          SELECT id
+          FROM market_disputes
+          WHERE resolution_id = $1 AND status = 'open'
+          LIMIT 1
+        `,
+        [resolution.id],
+      );
+
+      if (existingOpenDispute) {
+        throw new HttpError(
+          409,
+          "RESOLUTION_DISPUTE_ALREADY_OPEN",
+          "This resolution already has an open dispute.",
+        );
+      }
+
+      const disputeId = createStableId(
+        "mdis",
+        `${resolution.id}:${input.walletIdentityId}:${now}`,
+      );
+
+      await client.query(
+        `
+          INSERT INTO market_disputes (
+            id,
+            market_id,
+            resolution_id,
+            disputed_by,
+            reason,
+            status,
+            created_at
+          ) VALUES ($1, $2, $3, $4, $5, 'open', now())
+        `,
+        [disputeId, market.id, resolution.id, input.walletAddress, reason],
+      );
+
+      await client.query(
+        `
+          UPDATE market_resolutions
+          SET status = 'disputed',
+              dispute_reason = $2,
+              updated_at = now()
+          WHERE id = $1
+        `,
+        [resolution.id, reason],
+      );
+
+      await client.query(
+        "UPDATE markets SET status = 'disputed', updated_at = now() WHERE id = $1",
+        [market.id],
+      );
+
+      await client.query("COMMIT");
+      await writeAuditLog(this.db, this.logger, {
+        action: "market_dispute.created",
+        actorType: "wallet",
+        actorWalletIdentityId: input.walletIdentityId,
+        entityType: "market_dispute",
+        entityId: disputeId,
+        after: {
+          market_id: market.id,
+          resolution_id: resolution.id,
+          status: "open",
+        },
+      });
+      return this.getMarketDetail(market.id, input.walletAddress);
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async listMarketDisputes(status = "open") {
+    const rows = await queryRows<ResolutionDisputeRow>(
+      this.db,
+      `
+        SELECT
+          md.id,
+          m.id AS market_id,
+          m.slug AS market_slug,
+          m.title AS market_title,
+          mr.id AS resolution_id,
+          mr.proposed_outcome,
+          mr.evidence_snapshot_id,
+          mr.evidence_summary,
+          ts.generated_at::text AS evidence_snapshot_generated_at,
+          mr.dispute_deadline::text,
+          md.disputed_by,
+          md.reason,
+          md.status,
+          md.created_at::text
+        FROM market_disputes md
+        JOIN markets m ON m.id = md.market_id
+        JOIN market_resolutions mr ON mr.id = md.resolution_id
+        LEFT JOIN topic_snapshots ts ON ts.id = mr.evidence_snapshot_id
+        WHERE md.status = $1
+        ORDER BY md.created_at ASC
+      `,
+      [status],
+    );
+
+    return {
+      data: rows.map(mapResolutionDisputeRow),
+    };
+  }
+
+  async acceptMarketDispute(
+    disputeId: string,
+    input: ResolutionDisputeActorInput & { finalOutcome: MarketOutcome },
+  ) {
+    const resolvedAt = new Date().toISOString();
+    const client = await this.db.connect();
+
+    try {
+      await client.query("BEGIN");
+      const dispute = await this.requireOpenDispute(disputeId, client);
+      const market = await this.requireManagedMarket(dispute.market_id, client);
+      await this.lockMarketRow(client, market.id);
+
+      const settlement = await this.settleMarketPayouts(client, market, {
+        outcome: input.finalOutcome,
+        evidenceUri: `topic_snapshot:${dispute.evidence_snapshot_id}`,
+        submittedTxSig: null,
+        resolvedAt,
+        submittedByWalletId: input.walletIdentityId,
+      });
+
+      await client.query(
+        `
+          UPDATE market_resolutions
+          SET
+            status = 'finalized',
+            finalized_outcome = $2,
+            finalized_at = $3,
+            finalized_by = $4,
+            updated_at = now()
+          WHERE id = $1
+        `,
+        [
+          dispute.resolution_id,
+          input.finalOutcome,
+          resolvedAt,
+          `admin:${input.walletAddress}`,
+        ],
+      );
+
+      await client.query(
+        `
+          UPDATE market_disputes
+          SET status = 'accepted',
+              resolved_at = $2,
+              resolved_by = $3
+          WHERE id = $1
+        `,
+        [dispute.id, resolvedAt, input.walletAddress],
+      );
+
+      await client.query("COMMIT");
+      await writeAuditLog(this.db, this.logger, {
+        action: "market_dispute.accepted",
+        actorType: "admin",
+        actorWalletIdentityId: input.walletIdentityId,
+        entityType: "market_dispute",
+        entityId: dispute.id,
+        after: {
+          market_id: market.id,
+          resolution_id: dispute.resolution_id,
+          final_outcome: input.finalOutcome,
+          status: "accepted",
+        },
+      });
+      return {
+        ...(await this.listMarketDisputes("open")),
+        settlement,
+      };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async rejectMarketDispute(
+    disputeId: string,
+    input: ResolutionDisputeActorInput,
+  ) {
+    const resolvedAt = new Date().toISOString();
+    const client = await this.db.connect();
+
+    try {
+      await client.query("BEGIN");
+      const dispute = await this.requireOpenDispute(disputeId, client);
+
+      await client.query(
+        `
+          UPDATE market_disputes
+          SET status = 'rejected',
+              resolved_at = $2,
+              resolved_by = $3
+          WHERE id = $1
+        `,
+        [dispute.id, resolvedAt, input.walletAddress],
+      );
+
+      await client.query(
+        `
+          UPDATE market_resolutions
+          SET status = 'proposed',
+              updated_at = now()
+          WHERE id = $1
+        `,
+        [dispute.resolution_id],
+      );
+
+      await client.query(
+        `
+          UPDATE markets
+          SET status = 'resolving',
+              updated_at = now()
+          WHERE id = $1 AND status = 'disputed'
+        `,
+        [dispute.market_id],
+      );
+
+      await client.query("COMMIT");
+      await writeAuditLog(this.db, this.logger, {
+        action: "market_dispute.rejected",
+        actorType: "admin",
+        actorWalletIdentityId: input.walletIdentityId,
+        entityType: "market_dispute",
+        entityId: dispute.id,
+        after: {
+          market_id: dispute.market_id,
+          resolution_id: dispute.resolution_id,
+          status: "rejected",
+        },
+      });
+      return this.listMarketDisputes("open");
     } catch (error) {
       await client.query("ROLLBACK");
       throw error;
@@ -2732,6 +3199,67 @@ export class MarketsService {
     return market;
   }
 
+  private async requireOpenDispute(disputeId: string, client: PoolClient) {
+    const dispute = await queryOne<
+      ResolutionDisputeRow & {
+        resolution_status: string;
+      }
+    >(
+      client,
+      `
+        SELECT
+          md.id,
+          m.id AS market_id,
+          m.slug AS market_slug,
+          m.title AS market_title,
+          mr.id AS resolution_id,
+          mr.status AS resolution_status,
+          mr.proposed_outcome,
+          mr.evidence_snapshot_id,
+          mr.evidence_summary,
+          ts.generated_at::text AS evidence_snapshot_generated_at,
+          mr.dispute_deadline::text,
+          md.disputed_by,
+          md.reason,
+          md.status,
+          md.created_at::text
+        FROM market_disputes md
+        JOIN markets m ON m.id = md.market_id
+        JOIN market_resolutions mr ON mr.id = md.resolution_id
+        LEFT JOIN topic_snapshots ts ON ts.id = mr.evidence_snapshot_id
+        WHERE md.id = $1
+        FOR UPDATE OF md, mr
+      `,
+      [disputeId],
+    );
+
+    if (!dispute) {
+      throw new HttpError(
+        404,
+        "DISPUTE_NOT_FOUND",
+        `Dispute '${disputeId}' was not found.`,
+      );
+    }
+
+    if (dispute.status !== "open") {
+      throw new HttpError(
+        409,
+        "DISPUTE_NOT_OPEN",
+        "Only open disputes can be resolved.",
+      );
+    }
+
+    if (dispute.resolution_status !== "disputed") {
+      throw new HttpError(
+        409,
+        "RESOLUTION_NOT_DISPUTED",
+        "The linked resolution is no longer disputed.",
+      );
+    }
+
+    return dispute;
+  }
+
   private async lockMarketRow(client: PoolClient, marketId: string) {
     await client.query("SELECT id FROM markets WHERE id = $1 FOR UPDATE", [
       marketId,
@@ -3301,6 +3829,29 @@ function isMarketOutcome(
   value: string | null | undefined,
 ): value is MarketOutcome {
   return value === "YES" || value === "NO";
+}
+
+function mapResolutionDisputeRow(row: ResolutionDisputeRow) {
+  return {
+    id: row.id,
+    market: {
+      id: row.market_id,
+      slug: row.market_slug,
+      title: row.market_title,
+    },
+    resolution: {
+      id: row.resolution_id,
+      proposed_outcome: row.proposed_outcome,
+      evidence_summary: row.evidence_summary,
+      evidence_snapshot_id: row.evidence_snapshot_id,
+      evidence_snapshot_generated_at: row.evidence_snapshot_generated_at,
+      dispute_deadline: row.dispute_deadline,
+    },
+    disputed_by: row.disputed_by,
+    reason: row.reason,
+    status: row.status,
+    created_at: row.created_at,
+  };
 }
 
 function getMarketCreatedByActorLabel(value: string | null | undefined) {

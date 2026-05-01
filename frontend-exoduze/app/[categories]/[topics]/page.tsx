@@ -17,6 +17,7 @@ import {
   formatMarketStatusLabel,
   formatSlugLabel,
 } from "@/lib/market-formatters"
+import { buildPageMetadata } from "@/lib/seo"
 
 type TopicPageProps = {
   params: Promise<{
@@ -53,6 +54,28 @@ const getTopicPage = async (categorySlug: string, topicSlug: string) => {
   return (await response.json()) as CategoryPageResponse
 }
 
+export async function generateMetadata({ params }: TopicPageProps) {
+  const { categories: categorySlug, topics: topicSlug } = await params
+
+  try {
+    const topicResponse = await getTopicPage(categorySlug, topicSlug)
+    const { category, filters } = topicResponse.data
+    const topicName = filters.selected_topic?.name ?? formatSlugLabel(topicSlug)
+
+    return buildPageMetadata({
+      title: `${topicName} Markets`,
+      description: `Browse Exoduze ${category.name} markets linked to ${topicName}.`,
+      pathname: `/${category.slug}/${topicSlug}`,
+    })
+  } catch {
+    return buildPageMetadata({
+      title: `${formatSlugLabel(topicSlug)} Markets`,
+      description: "Browse Exoduze prediction markets by topic.",
+      pathname: `/${categorySlug}/${topicSlug}`,
+    })
+  }
+}
+
 export default async function TopicPage({ params }: TopicPageProps) {
   const { categories: categorySlug, topics: topicSlug } = await params
   const topicResponse = await getTopicPage(categorySlug, topicSlug)
@@ -60,7 +83,7 @@ export default async function TopicPage({ params }: TopicPageProps) {
   const selectedTopic = filters.selected_topic
 
   return (
-    <main className="mx-4 space-y-8 py-10 md:mx-10 xl:mx-20">
+    <main className="mx-auto w-full max-w-[1600px] space-y-8 px-4 py-10 sm:px-6 lg:px-10 xl:px-20">
       <Link
         href={`/${category.slug}`}
         className="inline-flex text-sm font-medium text-neutral-600 transition hover:text-neutral-950 dark:text-neutral-400 dark:hover:text-neutral-50"

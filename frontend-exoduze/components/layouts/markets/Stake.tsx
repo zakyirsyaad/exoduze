@@ -29,7 +29,7 @@ import {
 import { useAuth } from "@/hooks/useAuth"
 import { useOpenPosition } from "@/hooks/useOpenPosition"
 import type { MarketAgent, MarketDetail, MarketUserContext } from "@/hooks/Type"
-import { apiFetch } from "@/lib/api"
+import { ApiError, apiFetch } from "@/lib/api"
 import {
   deriveAssociatedTokenAddress,
   ExoduzeProgramUnavailableError,
@@ -570,7 +570,7 @@ export function Stake({ agents, market, userContext = null }: StakeProps) {
         </CardContent>
         <CardFooter>
           <Button type="submit" className="w-full" disabled={isSubmitDisabled}>
-            {openPosition.loading ? "Opening..." : "Open Position"}
+            {openPosition.loading ? "Opening position..." : "Open Position"}
           </Button>
         </CardFooter>
       </form>
@@ -621,16 +621,8 @@ function getMarketStakeDisabledReason(market: MarketDetail) {
     return `Market is ${formatMarketStatusLabel(market.status)}.`
   }
 
-  if (
-    isApiDateSameOrBeforeNow(
-      market.timing.decision_cutoff_at ?? market.timing.closes_at
-    )
-  ) {
+  if (isApiDateSameOrBeforeNow(market.timing.join_deadline_at)) {
     return "Position window is closed."
-  }
-
-  if (isApiDateSameOrBeforeNow(market.timing.closes_at)) {
-    return "Market is closed."
   }
 
   return null
@@ -779,6 +771,20 @@ function getOpenPositionErrorMessage(error: unknown, txSubmitted: boolean) {
 
   if (error instanceof ExoduzeProgramUnavailableError) {
     return `${prefix}On-chain positions are not available yet.`
+  }
+
+  if (error instanceof ApiError) {
+    if (error.status === 401) {
+      return `${prefix}Connect and sign your wallet before opening a position.`
+    }
+
+    if (error.status === 403) {
+      return `${prefix}This wallet is not authorized to sync this position.`
+    }
+
+    if (error.status === 409) {
+      return `${prefix}The position could not be synced because the market or transaction state changed. Refresh the market and try again.`
+    }
   }
 
   if (isPendingOnchainSyncError(error)) {

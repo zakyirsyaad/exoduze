@@ -19,6 +19,8 @@ const marketDetailQuerySchema = z.object({
   wallet: z.string().optional()
 });
 
+const nullableIsoDateSchema = isoDateSchema.nullable().optional();
+
 const positiveDecimalSchema = z
   .string()
   .trim()
@@ -39,6 +41,54 @@ const solanaPublicKeySchema = z.string().trim().min(32).max(64);
 const solanaSignatureSchema = z.string().trim().min(32).max(128);
 const strategyPresetSchema = z.enum(strategyPresets);
 const battleWeightSchema = z.coerce.number().int().min(0).max(100);
+
+const marketMutationBodySchema = z.object({
+  category: z.string().min(1),
+  slug: z.string().min(1).optional(),
+  title: z.string().min(1),
+  short_description: z.string().min(1),
+  description: z.string().min(1),
+  image_uri: z.string().url().nullable().optional(),
+  status: marketStatusSchema,
+  oracle_source: z.string().min(1),
+  settlement_asset: z.string().min(1),
+  onchain_market_pubkey: z.string().min(1).nullable().optional(),
+  opens_at: isoDateSchema,
+  join_deadline_at: isoDateSchema.optional(),
+  decision_cutoff_at: isoDateSchema,
+  closes_at: isoDateSchema,
+  resolves_at: nullableIsoDateSchema,
+  total_liquidity_usdc: positiveDecimalSchema,
+  final_liquidity_usdc: positiveDecimalSchema.nullable().optional(),
+  resolver_wallet: z.string().min(1).nullable().optional(),
+  rules: z.array(z.unknown()).optional(),
+  context: z.record(z.unknown()).optional(),
+  topic_slugs: z.array(z.string().min(1)).min(1),
+});
+
+const patchMarketMutationBodySchema = marketMutationBodySchema.partial().refine(
+  (value) => Object.keys(value).length > 0,
+  { message: "At least one market field must be provided." },
+);
+
+const marketResolveBodySchema = z.object({
+  outcome: z.enum(["YES", "NO"]),
+  evidence_uri: z.string().min(1).nullable().optional(),
+  submitted_tx_sig: solanaSignatureSchema.nullable().optional(),
+  resolved_at: isoDateSchema.optional(),
+});
+
+const disputeResolutionBodySchema = z.object({
+  reason: z.string().trim().min(10).max(2000),
+});
+
+const adminDisputeQuerySchema = z.object({
+  status: z.enum(["open", "accepted", "rejected"]).default("open"),
+});
+
+const adminAcceptDisputeBodySchema = z.object({
+  final_outcome: z.enum(["YES", "NO"]),
+});
 
 const marketAgentJoinBodySchema = z
   .object({
@@ -225,6 +275,160 @@ export async function registerMarketRoutes(
     });
   });
 
+  app.post("/v1/markets", async (request, reply) => {
+    const auth = app.requireAdmin(request, reply);
+    if (!auth) {
+      return;
+    }
+
+    const body = marketMutationBodySchema.parse(request.body ?? {});
+    const payload = mapMarketMutationBody(body) as Parameters<
+      MarketsService["createMarket"]
+    >[0];
+    reply.code(201);
+    return service.createMarket(payload, {
+      createdByWalletId: auth.walletIdentityId,
+    });
+  });
+
+  app.put("/v1/markets/:marketIdOrSlug", async (request, reply) => {
+    const auth = app.requireAdmin(request, reply);
+    if (!auth) {
+      return;
+    }
+
+    const params = z.object({ marketIdOrSlug: z.string().min(1) }).parse(request.params);
+    const body = marketMutationBodySchema.parse(request.body ?? {});
+    const payload = mapMarketMutationBody(body) as Parameters<
+      MarketsService["replaceMarket"]
+    >[1];
+    return service.replaceMarket(params.marketIdOrSlug, payload);
+  });
+
+  app.patch("/v1/markets/:marketIdOrSlug", async (request, reply) => {
+    const auth = app.requireAdmin(request, reply);
+    if (!auth) {
+      return;
+    }
+
+    const params = z.object({ marketIdOrSlug: z.string().min(1) }).parse(request.params);
+    const body = patchMarketMutationBodySchema.parse(request.body ?? {});
+    return service.patchMarket(params.marketIdOrSlug, mapMarketMutationBody(body));
+  });
+
+  app.delete("/v1/markets/:marketIdOrSlug", async (request, reply) => {
+    const auth = app.requireAdmin(request, reply);
+    if (!auth) {
+      return;
+    }
+
+    const params = z.object({ marketIdOrSlug: z.string().min(1) }).parse(request.params);
+    return service.deleteMarket(params.marketIdOrSlug);
+  });
+
+  app.post("/v1/markets/:marketIdOrSlug/onchain", async (request, reply) => {
+    const auth = app.requireAdmin(request, reply);
+    if (!auth) {
+      return;
+    }
+
+    const params = z.object({ marketIdOrSlug: z.string().min(1) }).parse(request.params);
+    return service.publishMarketOnchain(params.marketIdOrSlug);
+  });
+
+  app.post("/v1/markets/:marketIdOrSlug/resolve", async (request, reply) => {
+    const auth = app.requireAdmin(request, reply);
+    if (!auth) {
+      return;
+    }
+
+    const params = z.object({ marketIdOrSlug: z.string().min(1) }).parse(request.params);
+    const body = marketResolveBodySchema.parse(request.body ?? {});
+    return service.resolveMarket(params.marketIdOrSlug, {
+      outcome: body.outcome,
+      evidenceUri: body.evidence_uri ?? undefined,
+      submittedTxSig: body.submitted_tx_sig ?? undefined,
+      resolvedAt: body.resolved_at,
+      submittedByWalletId: auth.walletIdentityId,
+    });
+  });
+
+  app.get("/v1/admin/disputes", async (request, reply) => {
+    const auth = app.requireAdmin(request, reply);
+    if (!auth) {
+      return;
+    }
+
+    const query = adminDisputeQuerySchema.parse(request.query);
+    return service.listMarketDisputes(query.status);
+  });
+
+  app.get("/v1/admin/market-disputes", async (request, reply) => {
+    const auth = app.requireAdmin(request, reply);
+    if (!auth) {
+      return;
+    }
+
+    const query = adminDisputeQuerySchema.parse(request.query);
+    return service.listMarketDisputes(query.status);
+  });
+
+  app.post("/v1/admin/disputes/:disputeId/accept", async (request, reply) => {
+    const auth = app.requireAdmin(request, reply);
+    if (!auth) {
+      return;
+    }
+
+    const params = z.object({ disputeId: z.string().min(1) }).parse(request.params);
+    const body = adminAcceptDisputeBodySchema.parse(request.body ?? {});
+    return service.acceptMarketDispute(params.disputeId, {
+      finalOutcome: body.final_outcome,
+      walletAddress: auth.walletAddress,
+      walletIdentityId: auth.walletIdentityId,
+    });
+  });
+
+  app.post("/v1/admin/market-disputes/:disputeId/accept", async (request, reply) => {
+    const auth = app.requireAdmin(request, reply);
+    if (!auth) {
+      return;
+    }
+
+    const params = z.object({ disputeId: z.string().min(1) }).parse(request.params);
+    const body = adminAcceptDisputeBodySchema.parse(request.body ?? {});
+    return service.acceptMarketDispute(params.disputeId, {
+      finalOutcome: body.final_outcome,
+      walletAddress: auth.walletAddress,
+      walletIdentityId: auth.walletIdentityId,
+    });
+  });
+
+  app.post("/v1/admin/disputes/:disputeId/reject", async (request, reply) => {
+    const auth = app.requireAdmin(request, reply);
+    if (!auth) {
+      return;
+    }
+
+    const params = z.object({ disputeId: z.string().min(1) }).parse(request.params);
+    return service.rejectMarketDispute(params.disputeId, {
+      walletAddress: auth.walletAddress,
+      walletIdentityId: auth.walletIdentityId,
+    });
+  });
+
+  app.post("/v1/admin/market-disputes/:disputeId/reject", async (request, reply) => {
+    const auth = app.requireAdmin(request, reply);
+    if (!auth) {
+      return;
+    }
+
+    const params = z.object({ disputeId: z.string().min(1) }).parse(request.params);
+    return service.rejectMarketDispute(params.disputeId, {
+      walletAddress: auth.walletAddress,
+      walletIdentityId: auth.walletIdentityId,
+    });
+  });
+
   app.post("/v1/markets/:marketIdOrSlug/agents/:agentIdOrSlug/join", async (request, reply) => {
     const auth = app.requireAuth(request, reply);
     if (!auth) {
@@ -300,6 +504,31 @@ export async function registerMarketRoutes(
     return result;
   });
 
+  app.post("/v1/markets/:marketIdOrSlug/resolutions/:resolutionId/dispute", async (request, reply) => {
+    const auth = app.requireAuth(request, reply);
+    if (!auth) {
+      return;
+    }
+
+    const params = z
+      .object({
+        marketIdOrSlug: z.string().min(1),
+        resolutionId: z.string().min(1),
+      })
+      .parse(request.params);
+    const body = disputeResolutionBodySchema.parse(request.body ?? {});
+    reply.code(201);
+    return service.createResolutionDispute(
+      params.marketIdOrSlug,
+      params.resolutionId,
+      {
+        reason: body.reason,
+        walletAddress: auth.walletAddress,
+        walletIdentityId: auth.walletIdentityId,
+      },
+    );
+  });
+
   app.get("/v1/markets/:marketIdOrSlug", async (request, reply) => {
     const params = z.object({ marketIdOrSlug: z.string().min(1) }).parse(request.params);
     const query = marketDetailQuerySchema.parse(request.query);
@@ -360,4 +589,46 @@ function closeSocket(
   }
 
   socket.close(code, reason);
+}
+
+function mapMarketMutationBody(body: z.infer<typeof patchMarketMutationBodySchema>) {
+  return {
+    ...(body.category !== undefined ? { category: body.category } : {}),
+    ...(body.slug !== undefined ? { slug: body.slug } : {}),
+    ...(body.title !== undefined ? { title: body.title } : {}),
+    ...(body.short_description !== undefined
+      ? { shortDescription: body.short_description }
+      : {}),
+    ...(body.description !== undefined ? { description: body.description } : {}),
+    ...(body.image_uri !== undefined ? { imageUri: body.image_uri } : {}),
+    ...(body.status !== undefined ? { status: body.status } : {}),
+    ...(body.oracle_source !== undefined ? { oracleSource: body.oracle_source } : {}),
+    ...(body.settlement_asset !== undefined
+      ? { settlementAsset: body.settlement_asset }
+      : {}),
+    ...(body.onchain_market_pubkey !== undefined
+      ? { onchainMarketPubkey: body.onchain_market_pubkey }
+      : {}),
+    ...(body.opens_at !== undefined ? { opensAt: body.opens_at } : {}),
+    ...(body.join_deadline_at !== undefined
+      ? { joinDeadlineAt: body.join_deadline_at }
+      : {}),
+    ...(body.decision_cutoff_at !== undefined
+      ? { decisionCutoffAt: body.decision_cutoff_at }
+      : {}),
+    ...(body.closes_at !== undefined ? { closesAt: body.closes_at } : {}),
+    ...(body.resolves_at !== undefined ? { resolvesAt: body.resolves_at } : {}),
+    ...(body.total_liquidity_usdc !== undefined
+      ? { totalLiquidityUsdc: body.total_liquidity_usdc }
+      : {}),
+    ...(body.final_liquidity_usdc !== undefined
+      ? { finalLiquidityUsdc: body.final_liquidity_usdc }
+      : {}),
+    ...(body.resolver_wallet !== undefined
+      ? { resolverWallet: body.resolver_wallet }
+      : {}),
+    ...(body.rules !== undefined ? { rules: body.rules } : {}),
+    ...(body.context !== undefined ? { context: body.context } : {}),
+    ...(body.topic_slugs !== undefined ? { topicSlugs: body.topic_slugs } : {}),
+  };
 }

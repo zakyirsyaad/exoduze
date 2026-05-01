@@ -144,7 +144,7 @@ export class OracleResolverService {
         SELECT id, status
         FROM market_resolutions
         WHERE market_id = $1
-          AND status IN ('proposed', 'disputed', 'finalized')
+          AND status IN ('proposed', 'settling', 'disputed', 'finalized')
         LIMIT 1
       `,
       [market.id],
@@ -226,7 +226,7 @@ export class OracleResolverService {
           SELECT id, status
           FROM market_resolutions
           WHERE market_id = $1
-            AND status IN ('proposed', 'disputed', 'finalized')
+            AND status IN ('proposed', 'settling', 'disputed', 'finalized')
           LIMIT 1
         `,
         [market.id],
@@ -342,5 +342,5 @@ export function determineOracleOutcome(
 }
 
 export function isActiveResolutionStatus(status: string) {
-  return ["proposed", "disputed", "finalized"].includes(status);
+  return ["proposed", "settling", "disputed", "finalized"].includes(status);
 }

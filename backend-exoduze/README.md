@@ -167,7 +167,8 @@ If local startup fails with `getaddrinfo ENOTFOUND db.<project-ref>.supabase.co`
 - AI decision foundations live in `src/modules/ai`.
 - The module builds canonical prompts and computes `prompt_hash`, `config_hash`, `snapshot_hash`, and `reason_hash`.
 - `POST /v1/markets/:marketIdOrSlug/agents/:agentIdOrSlug/join` accepts `{ "user_prompt": "..." }`, generates the agent decision, and stores the market agent, prompt artifact, pending commitment, and decision trail.
-- `AI_DECISION_PROVIDER=heuristic` is the local development fallback and does not call a live model.
+- `AI_DECISION_PROVIDER=mock` is the local battle-prediction fallback and does not call a live model.
+- `AI_DECISION_PROVIDER=heuristic` remains supported for local non-battle AI decisions; battle predictions treat it as local mock mode outside staging/production.
 - `AI_DECISION_PROVIDER=openai` uses the OpenAI Responses API with structured JSON output; configure `OPENAI_API_KEY` and `OPENAI_MODEL`.
 
 ## Supabase notes

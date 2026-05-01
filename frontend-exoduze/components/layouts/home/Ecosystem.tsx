@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import Image from "next/image"
 
 import type { Agent, PageInfo } from "@/hooks/Type"
 import { useApi } from "@/hooks/useApi"
@@ -47,7 +48,14 @@ const ReviewCard = ({
     >
       <div className="flex flex-row items-center gap-2">
         {img ? (
-          <img className="rounded-full" width="32" height="32" alt="" src={img} />
+          <Image
+            className="rounded-full object-cover"
+            width={32}
+            height={32}
+            alt={`${name} avatar`}
+            src={img}
+            unoptimized
+          />
         ) : (
           <div className="flex size-8 items-center justify-center rounded-full bg-gradient-to-br from-lime-200 to-cyan-200 text-xs font-semibold text-neutral-950">
             {getAgentInitials(name)}

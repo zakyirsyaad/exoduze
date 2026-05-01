@@ -186,7 +186,7 @@ export class AiMarketJoinService {
     await this.assertOwnerJoinSlotAvailable(marketContext.id, agent);
     const latestVersion = await this.ensureLatestAgentVersion(agent);
     const strategy = this.resolveBattleStrategyInput(input);
-    const aiDecision = this.battlePredictionService.generatePrediction({
+    const aiDecision = await this.battlePredictionService.generatePrediction({
       agent: {
         id: agent.id,
         name: agent.name,
@@ -363,7 +363,7 @@ export class AiMarketJoinService {
           strategy.stakeUsdc,
           JSON.stringify(aiDecision.prediction),
           aiDecision.predictionHash,
-          "submitted",
+          "pending_onchain",
         ]
       );
 
@@ -395,7 +395,7 @@ export class AiMarketJoinService {
           },
           battle_entry: {
             id: battleEntryId,
-            status: "submitted",
+            status: "pending_onchain",
             strategy_preset: strategy.preset,
             stake_usdc: strategy.stakeUsdc,
             prediction_hash: aiDecision.predictionHash,
@@ -554,9 +554,9 @@ export class AiMarketJoinService {
         `
           UPDATE agent_commitments
           SET
-            commit_tx_sig = CASE WHEN $2 AND $3 IS NOT NULL THEN $3 ELSE commit_tx_sig END,
-            onchain_commitment_ref = COALESCE($4, onchain_commitment_ref),
-            verification_status = CASE WHEN $5 THEN $6 ELSE verification_status END,
+            commit_tx_sig = CASE WHEN $2::boolean AND $3::text IS NOT NULL THEN $3::text ELSE commit_tx_sig END,
+            onchain_commitment_ref = COALESCE($4::text, onchain_commitment_ref),
+            verification_status = CASE WHEN $5::boolean THEN $6::text ELSE verification_status END,
             updated_at = now()
           WHERE id = $1
         `,
@@ -781,7 +781,7 @@ export class AiMarketJoinService {
       throw new HttpError(409, "MARKET_NOT_STAKEABLE", "Positions can only be opened for open or upcoming markets.");
     }
 
-    if (Date.parse(market.decision_cutoff_at) <= Date.now() || Date.parse(market.closes_at) <= Date.now()) {
+    if (Date.parse(market.join_deadline_at) <= Date.now()) {
       throw new HttpError(409, "MARKET_POSITION_WINDOW_CLOSED", "The market position window has already closed.");
     }
 
@@ -1330,7 +1330,15 @@ export class AiMarketJoinService {
   }
 
   private getDecisionModelName(modelProvider: string) {
-    return modelProvider === "openai" ? this.env.OPENAI_MODEL : "exoduze-heuristic-v1";
+    if (modelProvider === "openai") {
+      return this.env.OPENAI_MODEL;
+    }
+
+    if (modelProvider === "mock") {
+      return "exoduze-battle-mock-v1";
+    }
+
+    return "exoduze-heuristic-v1";
   }
 
   private async createDefaultAgentVersion(

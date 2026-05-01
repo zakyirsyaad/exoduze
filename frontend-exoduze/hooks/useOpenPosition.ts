@@ -78,7 +78,7 @@ export function useOpenPosition() {
         const walletConnector =
           wallet.status === "connected" ? wallet.session.connector : null
 
-        console.error("[stake] open position transaction failed", {
+        console.warn("[stake] open position transaction failed", {
           connectorId: walletConnector?.id ?? null,
           connectorKind: walletConnector?.kind ?? null,
           connectorName: walletConnector?.name ?? null,

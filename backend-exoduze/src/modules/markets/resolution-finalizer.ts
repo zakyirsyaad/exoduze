@@ -4,6 +4,7 @@ import type { Env } from "../../config/env.js";
 import type { AppDatabase } from "../../db/database.js";
 import { queryOne, queryRows } from "../../db/query.js";
 import { createStableId } from "../../lib/ids.js";
+import { writeAuditLog } from "../audit/audit-log.js";
 import type { ExoduzeOnchainService } from "../onchain/exoduze-onchain.service.js";
 import { MarketsService } from "./markets.service.js";
 
@@ -21,9 +22,12 @@ type ProposedResolutionRow = QueryResultRow & {
   evidence_summary: string;
   status: string;
   dispute_deadline: string;
+  updated_at: string;
   market_oracle_source: string;
   market_status: string;
   onchain_market_pubkey: string | null;
+  onchain_settlement_tx_sig: string | null;
+  onchain_settled_at: string | null;
 };
 
 export type FinalizeResolutionsResult = {
@@ -37,6 +41,8 @@ export type FinalizeResolutionsResult = {
 };
 
 export class ResolutionFinalizerService {
+  private static readonly SETTLING_RETRY_AFTER_MS = 5 * 60 * 1000;
+
   constructor(
     private readonly db: AppDatabase,
     private readonly env: Env,
@@ -69,19 +75,27 @@ export class ResolutionFinalizerService {
           mr.evidence_summary,
           mr.status,
           mr.dispute_deadline::text,
+          mr.updated_at::text,
           m.oracle_source AS market_oracle_source,
           m.status AS market_status,
-          m.onchain_market_pubkey
+          m.onchain_market_pubkey,
+          mr.onchain_settlement_tx_sig,
+          mr.onchain_settled_at::text
         FROM market_resolutions mr
         JOIN markets m ON m.id = mr.market_id
         WHERE (
             (mr.status = 'proposed' AND mr.dispute_deadline <= $1::timestamptz)
-            OR mr.status = 'finalized'
+            OR (mr.status = 'settling' AND mr.updated_at <= $2::timestamptz)
           )
           AND m.status NOT IN ('resolved', 'disputed', 'cancelled')
         ORDER BY COALESCE(mr.finalized_at, mr.dispute_deadline) ASC, mr.updated_at ASC
       `,
-      [now.toISOString()],
+      [
+        now.toISOString(),
+        new Date(
+          now.getTime() - ResolutionFinalizerService.SETTLING_RETRY_AFTER_MS,
+        ).toISOString(),
+      ],
     );
 
     let resolutionsFinalized = 0;
@@ -126,6 +140,98 @@ export class ResolutionFinalizerService {
     now: Date,
   ) {
     const resolvedAt = now.toISOString();
+    const claimedResolution = await this.claimResolutionForSettlement(
+      resolution,
+      now,
+    );
+    if (!claimedResolution) {
+      return false;
+    }
+    await writeAuditLog(this.db, this.logger, {
+      action: "resolution_settlement.attempted",
+      actorType: "system",
+      entityType: "market_resolution",
+      entityId: claimedResolution.id,
+      after: {
+        market_id: claimedResolution.market_id,
+        outcome: claimedResolution.proposed_outcome,
+        onchain_required: Boolean(
+          this.env.AUTONOMOUS_RESOLVE_ONCHAIN &&
+            claimedResolution.onchain_market_pubkey,
+        ),
+      },
+    });
+
+    let onchainResolution: Awaited<
+      ReturnType<ResolutionFinalizerService["resolveMarketOnchainIfNeeded"]>
+    > = null;
+
+    try {
+      onchainResolution = await this.resolveMarketOnchainIfNeeded(
+        claimedResolution,
+        resolvedAt,
+      );
+      const finalized = await this.marketsService.finalizeAutomaticResolution({
+        resolutionId: claimedResolution.id,
+        marketId: claimedResolution.market_id,
+        outcome: claimedResolution.proposed_outcome,
+        evidenceUri: `topic_snapshot:${claimedResolution.evidence_snapshot_id}`,
+        submittedTxSig: onchainResolution?.tx_sig ?? null,
+        resolvedAt,
+        finalizedBy: "oracle_bot",
+      });
+
+      if (!finalized.finalized) {
+        return false;
+      }
+      await writeAuditLog(this.db, this.logger, {
+        action: "resolution_settlement.succeeded",
+        actorType: "system",
+        entityType: "market_resolution",
+        entityId: claimedResolution.id,
+        after: {
+          market_id: claimedResolution.market_id,
+          outcome: claimedResolution.proposed_outcome,
+          onchain_tx_recorded: Boolean(onchainResolution?.tx_sig),
+          payout_count: finalized.settlement?.payout_count ?? null,
+        },
+      });
+
+      this.logger?.info?.(
+        {
+          resolutionId: claimedResolution.id,
+          marketId: claimedResolution.market_id,
+          outcome: claimedResolution.proposed_outcome,
+          onchain_tx_sig: onchainResolution?.tx_sig ?? null,
+        },
+        "Resolution finalized automatically.",
+      );
+      return true;
+    } catch (error) {
+      await this.releaseResolutionForRetry(claimedResolution.id);
+      await writeAuditLog(this.db, this.logger, {
+        action: "resolution_settlement.failed",
+        actorType: "system",
+        entityType: "market_resolution",
+        entityId: claimedResolution.id,
+        after: {
+          market_id: claimedResolution.market_id,
+          outcome: claimedResolution.proposed_outcome,
+          error: error instanceof Error ? error.message : "Unknown error",
+        },
+      });
+      this.logger?.error?.(
+        { err: error, resolutionId: claimedResolution.id },
+        "Resolution finalizer failed.",
+      );
+      throw error;
+    }
+  }
+
+  private async claimResolutionForSettlement(
+    resolution: ProposedResolutionRow,
+    now: Date,
+  ): Promise<ProposedResolutionRow | null> {
     const client = await this.db.connect();
     try {
       await client.query("BEGIN");
@@ -138,26 +244,46 @@ export class ResolutionFinalizerService {
 
       if (!market || ["resolved", "disputed", "cancelled"].includes(market.status)) {
         await client.query("ROLLBACK");
-        return false;
+        return null;
       }
 
-      const currentResolution = await queryOne<{ status: string }>(
+      const currentResolution = await queryOne<{
+        status: string;
+        dispute_deadline: string;
+        updated_at: string;
+        onchain_settlement_tx_sig: string | null;
+        onchain_settled_at: string | null;
+      }>(
         client,
         `
-          SELECT status
+          SELECT
+            status,
+            dispute_deadline::text,
+            updated_at::text,
+            onchain_settlement_tx_sig,
+            onchain_settled_at::text
           FROM market_resolutions
           WHERE id = $1
+          FOR UPDATE
           LIMIT 1
         `,
         [resolution.id],
       );
 
-      if (!currentResolution || ["disputed", "rejected"].includes(currentResolution.status)) {
+      if (
+        !currentResolution ||
+        ["disputed", "finalized", "rejected"].includes(currentResolution.status)
+      ) {
         await client.query("ROLLBACK");
-        return false;
+        return null;
       }
 
       if (currentResolution.status === "proposed") {
+        if (Date.parse(currentResolution.dispute_deadline) > now.getTime()) {
+          await client.query("ROLLBACK");
+          return null;
+        }
+
         const dispute = await queryOne<{ id: string }>(
           client,
           `
@@ -171,60 +297,63 @@ export class ResolutionFinalizerService {
 
         if (dispute) {
           await client.query("ROLLBACK");
-          return false;
+          return null;
         }
-
-        const updatedResolution = await client.query(
-          `
-            UPDATE market_resolutions
-            SET
-              status = 'finalized',
-              finalized_outcome = proposed_outcome,
-              finalized_at = $2,
-              finalized_by = 'oracle_bot',
-              updated_at = now()
-            WHERE id = $1
-              AND status = 'proposed'
-              AND dispute_deadline <= $2::timestamptz
-          `,
-          [resolution.id, resolvedAt],
-        );
-
-        if (Number(updatedResolution.rowCount ?? 0) === 0) {
+      } else if (currentResolution.status === "settling") {
+        const retryAfter = new Date(
+          now.getTime() - ResolutionFinalizerService.SETTLING_RETRY_AFTER_MS,
+        ).getTime();
+        const updatedAt = Date.parse(currentResolution.updated_at);
+        if (
+          resolution.status !== "settling" ||
+          Number.isNaN(updatedAt) ||
+          updatedAt > retryAfter
+        ) {
           await client.query("ROLLBACK");
-          return false;
+          return null;
         }
+      } else {
+        await client.query("ROLLBACK");
+        return null;
+      }
+
+      const updatedResolution = await queryOne<{
+        onchain_settlement_tx_sig: string | null;
+        onchain_settled_at: string | null;
+        updated_at: string;
+      }>(
+        client,
+        `
+          UPDATE market_resolutions
+          SET status = 'settling',
+              updated_at = now()
+          WHERE id = $1
+            AND status IN ('proposed', 'settling')
+          RETURNING
+            onchain_settlement_tx_sig,
+            onchain_settled_at::text,
+            updated_at::text
+        `,
+        [resolution.id],
+      );
+
+      if (!updatedResolution) {
+        await client.query("ROLLBACK");
+        return null;
       }
 
       await client.query("COMMIT");
 
-      const onchainResolution = await this.resolveMarketOnchainIfNeeded(
-        resolution,
-      );
-      await this.marketsService.resolveMarket(resolution.market_id, {
-        outcome: resolution.proposed_outcome,
-        evidenceUri: `topic_snapshot:${resolution.evidence_snapshot_id}`,
-        submittedTxSig: onchainResolution?.tx_sig ?? null,
-        resolvedAt,
-        submittedByWalletId: null,
-      });
-
-      this.logger?.info?.(
-        {
-          resolutionId: resolution.id,
-          marketId: resolution.market_id,
-          outcome: resolution.proposed_outcome,
-          onchain_tx_sig: onchainResolution?.tx_sig ?? null,
-        },
-        "Resolution finalized automatically.",
-      );
-      return true;
+      return {
+        ...resolution,
+        status: "settling",
+        updated_at: updatedResolution.updated_at,
+        onchain_settlement_tx_sig:
+          updatedResolution.onchain_settlement_tx_sig,
+        onchain_settled_at: updatedResolution.onchain_settled_at,
+      };
     } catch (error) {
       await client.query("ROLLBACK");
-      this.logger?.error?.(
-        { err: error, resolutionId: resolution.id },
-        "Resolution finalizer failed.",
-      );
       throw error;
     } finally {
       client.release();
@@ -233,7 +362,17 @@ export class ResolutionFinalizerService {
 
   private async resolveMarketOnchainIfNeeded(
     resolution: ProposedResolutionRow,
+    resolvedAt: string,
   ) {
+    if (resolution.onchain_settled_at) {
+      return {
+        already_resolved: true,
+        tx_sig: resolution.onchain_settlement_tx_sig,
+        market_pubkey: resolution.onchain_market_pubkey,
+        outcome: resolution.proposed_outcome,
+      };
+    }
+
     if (!this.env.AUTONOMOUS_RESOLVE_ONCHAIN) {
       return null;
     }
@@ -264,10 +403,51 @@ export class ResolutionFinalizerService {
       return null;
     }
 
-    return this.onchainService.resolveMarket({
+    const result = await this.onchainService.resolveMarket({
       marketPubkey: resolution.onchain_market_pubkey,
       outcome: resolution.proposed_outcome,
     });
+    await this.recordOnchainSettlement(resolution.id, result.tx_sig, resolvedAt);
+    return result;
+  }
+
+  private async recordOnchainSettlement(
+    resolutionId: string,
+    txSig: string | null,
+    settledAt: string,
+  ) {
+    await this.db.query(
+      `
+        UPDATE market_resolutions
+        SET
+          onchain_settlement_tx_sig = COALESCE($2, onchain_settlement_tx_sig),
+          onchain_settled_at = COALESCE(onchain_settled_at, $3::timestamptz),
+          updated_at = now()
+        WHERE id = $1
+          AND status = 'settling'
+      `,
+      [resolutionId, txSig, settledAt],
+    );
+  }
+
+  private async releaseResolutionForRetry(resolutionId: string) {
+    try {
+      await this.db.query(
+        `
+          UPDATE market_resolutions
+          SET status = 'proposed',
+              updated_at = now()
+          WHERE id = $1
+            AND status = 'settling'
+        `,
+        [resolutionId],
+      );
+    } catch (error) {
+      this.logger?.error?.(
+        { err: error, resolutionId },
+        "Failed to release resolution after settlement error.",
+      );
+    }
   }
 }
 

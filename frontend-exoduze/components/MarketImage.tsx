@@ -1,5 +1,6 @@
 "use client"
 
+import Image from "next/image"
 import { useState } from "react"
 
 import { cn } from "@/lib/utils"
@@ -23,14 +24,18 @@ export function MarketImage({
 
   if (src && failedSrc !== src) {
     return (
-      <img
-        src={src}
-        alt={alt}
-        loading="lazy"
-        referrerPolicy="no-referrer"
-        onError={() => setFailedSrc(src)}
-        className={cn("h-full w-full object-cover", className, imageClassName)}
-      />
+      <span className={cn("relative block h-full w-full", className)}>
+        <Image
+          src={src}
+          alt={alt}
+          fill
+          unoptimized
+          sizes="(max-width: 640px) 100vw, (max-width: 1280px) 50vw, 340px"
+          referrerPolicy="no-referrer"
+          onError={() => setFailedSrc(src)}
+          className={cn("object-cover", imageClassName)}
+        />
+      </span>
     )
   }
 

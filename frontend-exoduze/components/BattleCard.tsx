@@ -36,7 +36,7 @@ export function BattleCard({
 }: BattleCardProps) {
   return (
     <GlareHover className="rounded" duration={600}>
-      <Card className="w-full max-w-[340px]">
+      <Card className="w-full">
         <CardHeader>
           <div className="flex items-center justify-between">
             {/* <CardTitle>Pro</CardTitle> */}
@@ -55,7 +55,7 @@ export function BattleCard({
           />
         </div>
         <CardContent className="space-y-3">
-          <h1 className="text-normal line-clamp-2 font-semibold">{title}</h1>
+          <h2 className="line-clamp-2 text-base font-semibold">{title}</h2>
           {description ? (
             <p className="line-clamp-2 text-sm leading-6 text-neutral-600 dark:text-neutral-400">
               {description}
@@ -77,7 +77,7 @@ export function BattleCard({
           ) : null}
         </CardContent>
         <CardFooter>
-          <p>
+          <p className="text-sm">
             <b>{liquidity} </b>Total Liquidity
           </p>
         </CardFooter>

@@ -336,7 +336,7 @@ export function fetchOwnerAgents(walletAddress: string, filters?: {
 
 export function fetchAdminDisputes(status: "open" | "accepted" | "rejected" = "open") {
   return apiFetch<AdminMarketDisputesResponse>(
-    `/v1/admin/market-disputes${buildQuery({ status })}`,
+    `/v1/admin/disputes${buildQuery({ status })}`,
     {
       method: "GET",
     }
@@ -345,7 +345,7 @@ export function fetchAdminDisputes(status: "open" | "accepted" | "rejected" = "o
 
 export function acceptDispute(disputeId: string, finalOutcome: "YES" | "NO") {
   return apiFetch<AdminMarketDisputesResponse>(
-    `/v1/admin/market-disputes/${encodeURIComponent(disputeId)}/accept`,
+    `/v1/admin/disputes/${encodeURIComponent(disputeId)}/accept`,
     {
       method: "POST",
       body: JSON.stringify({
@@ -357,7 +357,7 @@ export function acceptDispute(disputeId: string, finalOutcome: "YES" | "NO") {
 
 export function rejectDispute(disputeId: string) {
   return apiFetch<AdminMarketDisputesResponse>(
-    `/v1/admin/market-disputes/${encodeURIComponent(disputeId)}/reject`,
+    `/v1/admin/disputes/${encodeURIComponent(disputeId)}/reject`,
     {
       method: "POST",
     }

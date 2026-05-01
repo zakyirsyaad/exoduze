@@ -78,7 +78,7 @@ export function useStakeAndJoinBattle() {
         const walletConnector =
           wallet.status === "connected" ? wallet.session.connector : null
 
-        console.error("[join-battle] stake transaction failed", {
+        console.warn("[join-battle] stake transaction failed", {
           connectorId: walletConnector?.id ?? null,
           connectorKind: walletConnector?.kind ?? null,
           connectorName: walletConnector?.name ?? null,

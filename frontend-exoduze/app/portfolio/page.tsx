@@ -84,7 +84,7 @@ export default function PortfolioPage() {
       )
       setPortfolio(response)
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to load portfolio")
+      setError(getPortfolioErrorMessage(err))
     } finally {
       setLoading(false)
     }
@@ -97,12 +97,6 @@ export default function PortfolioPage() {
 
     return () => window.clearTimeout(timeoutId)
   }, [loadPortfolio])
-
-  React.useEffect(() => {
-    if (claimDialogPayoutId && portfolio && !claimDialogPayout) {
-      setClaimDialogPayoutId(null)
-    }
-  }, [claimDialogPayout, claimDialogPayoutId, portfolio])
 
   const openClaimDialog = React.useCallback(
     (payout: PortfolioPayout) => {
@@ -190,9 +184,7 @@ export default function PortfolioPage() {
         setClaimDialogPayoutId(null)
         toast.success("Payout claim submitted")
       } catch (err) {
-        toast.error(
-          err instanceof Error ? err.message : "Unable to claim payout"
-        )
+        toast.error(getClaimErrorMessage(err))
       } finally {
         setClaimingPayoutId(null)
       }
@@ -221,7 +213,7 @@ export default function PortfolioPage() {
   const data = portfolio?.data
 
   return (
-    <main className="mx-auto flex w-full max-w-7xl flex-col gap-6 px-5 pb-16">
+    <main className="mx-auto flex w-full max-w-7xl flex-col gap-6 px-4 pb-16 sm:px-5">
       <section className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
         <div>
           <p className="text-sm text-neutral-500">Wallet Portfolio</p>
@@ -236,11 +228,12 @@ export default function PortfolioPage() {
         <Button
           type="button"
           variant="outline"
+          className="w-full sm:w-auto"
           onClick={() => void loadPortfolio()}
           disabled={loading}
         >
           <HugeiconsIcon icon={RefreshIcon} />
-          Refresh
+          {loading ? "Refreshing..." : "Refresh"}
         </Button>
       </section>
 
@@ -277,7 +270,7 @@ export default function PortfolioPage() {
         </Card>
       </section>
 
-      <section className="grid h-[500px] gap-6 xl:grid-cols-[1fr_0.9fr]">
+      <section className="grid gap-6 xl:grid-cols-[1fr_0.9fr]">
         <Card>
           <CardHeader>
             <CardTitle>User Participant</CardTitle>
@@ -286,7 +279,7 @@ export default function PortfolioPage() {
             </CardDescription>
           </CardHeader>
           <CardContent className="grid gap-3">
-            <ScrollArea className="h-[500px] pr-3 pb-20">
+            <ScrollArea className="h-[360px] pr-3 sm:h-[500px]">
               {data?.user_participants.length ? (
                 data.user_participants.map((item) => (
                   <article
@@ -335,7 +328,10 @@ export default function PortfolioPage() {
                   </article>
                 ))
               ) : (
-                <EmptyState text="No user positions yet." />
+                <EmptyState
+                  title="No positions yet"
+                  text="Open a position from a market page and it will appear here after backend sync."
+                />
               )}
             </ScrollArea>
           </CardContent>
@@ -349,7 +345,7 @@ export default function PortfolioPage() {
             </CardDescription>
           </CardHeader>
           <CardContent className="grid gap-3">
-            <ScrollArea className="h-[500px] pr-3 pb-20">
+            <ScrollArea className="h-[360px] pr-3 sm:h-[500px]">
               {data?.ai_battles.length ? (
                 data.ai_battles.map((item) => (
                   <article
@@ -390,7 +386,10 @@ export default function PortfolioPage() {
                   </article>
                 ))
               ) : (
-                <EmptyState text="No owned AI agents have joined a market yet." />
+                <EmptyState
+                  title="No AI battles yet"
+                  text="Agents owned by this wallet will show here after they join a market."
+                />
               )}
             </ScrollArea>
           </CardContent>
@@ -411,7 +410,7 @@ export default function PortfolioPage() {
               {claimConfiguration.reason}
             </p>
           ) : null}
-          <ScrollArea className="h-[500px] pr-3 pb-20">
+          <ScrollArea className="h-[360px] pr-3 sm:h-[500px]">
             {data?.payouts.length ? (
               data.payouts.map((payout) => {
                 const disabledReason = getClaimDisabledReason(
@@ -449,7 +448,7 @@ export default function PortfolioPage() {
                           : ""}
                       </p>
                     </div>
-                    <div className="flex min-w-[220px] flex-col items-start gap-2 md:items-end">
+                    <div className="flex w-full flex-col items-start gap-2 md:w-auto md:min-w-[220px] md:items-end">
                       <div className="space-y-1 text-left md:text-right">
                         <p className="text-[11px] tracking-normal text-neutral-500 uppercase">
                           Claimable total
@@ -481,8 +480,11 @@ export default function PortfolioPage() {
                 )
               })
             ) : (
-              <EmptyState text="No payouts yet." />
-            )}
+                <EmptyState
+                  title="No payouts yet"
+                  text="Claimable payouts appear here after a market settles and this wallet has a winning position."
+                />
+              )}
           </ScrollArea>
         </CardContent>
       </Card>
@@ -549,8 +551,13 @@ function Metric({ label, value }: { label: string; value: string }) {
   )
 }
 
-function EmptyState({ text }: { text: string }) {
-  return <p className="text-sm text-neutral-500">{text}</p>
+function EmptyState({ text, title }: { text: string; title: string }) {
+  return (
+    <div className="rounded-md border border-dashed border-black/10 p-4 text-sm dark:border-white/10">
+      <p className="font-medium">{title}</p>
+      <p className="mt-1 text-neutral-500">{text}</p>
+    </div>
+  )
 }
 
 function formatToken(value: string | undefined, symbol: string) {
@@ -568,6 +575,32 @@ function formatLabel(value: string) {
     .split("_")
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ")
+}
+
+function getPortfolioErrorMessage(error: unknown) {
+  if (error instanceof Error && /auth|session|wallet/i.test(error.message)) {
+    return "Your wallet session could not be verified. Reconnect your wallet and try again."
+  }
+
+  return "Portfolio data is temporarily unavailable. Try refreshing in a moment."
+}
+
+function getClaimErrorMessage(error: unknown) {
+  const message = error instanceof Error ? error.message : ""
+
+  if (/wallet|connect|sign/i.test(message)) {
+    return "Connect the payout wallet and approve the claim transaction to continue."
+  }
+
+  if (/balance|insufficient|rent|fee/i.test(message)) {
+    return "The claim could not be submitted. Check SOL for fees and the expected token accounts, then try again."
+  }
+
+  if (/not observed|not found|sync|confirm/i.test(message)) {
+    return "The claim transaction was submitted, but confirmation is still syncing. Wait a few seconds and refresh the portfolio."
+  }
+
+  return "Unable to claim payout right now. Review the payout status and try again."
 }
 
 function getClaimDisabledReason(

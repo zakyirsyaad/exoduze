@@ -201,10 +201,28 @@ export const MobileNavMenu = ({
   isOpen,
   onClose,
 }: MobileNavMenuProps) => {
+  React.useEffect(() => {
+    if (!isOpen) {
+      return
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        onClose()
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown)
+    return () => window.removeEventListener("keydown", handleKeyDown)
+  }, [isOpen, onClose])
+
   return (
     <AnimatePresence>
       {isOpen && (
         <motion.div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Mobile navigation"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
@@ -228,9 +246,23 @@ export const MobileNavToggle = ({
   onClick: () => void
 }) => {
   return isOpen ? (
-    <IconX className="text-black dark:text-white" onClick={onClick} />
+    <button
+      type="button"
+      aria-label="Close navigation menu"
+      onClick={onClick}
+      className="rounded-md p-2 text-black transition hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none dark:text-white"
+    >
+      <IconX aria-hidden="true" />
+    </button>
   ) : (
-    <IconMenu2 className="text-black dark:text-white" onClick={onClick} />
+    <button
+      type="button"
+      aria-label="Open navigation menu"
+      onClick={onClick}
+      className="rounded-md p-2 text-black transition hover:bg-secondary focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none dark:text-white"
+    >
+      <IconMenu2 aria-hidden="true" />
+    </button>
   )
 }
 
@@ -240,13 +272,10 @@ export const NavbarLogo = () => {
       href="/"
       className="relative z-20 mr-4 flex items-center space-x-2 px-2 py-1 text-sm font-normal text-black"
     >
-      <img
-        src="https://assets.aceternity.com/logo-dark.png"
-        alt="logo"
-        width={30}
-        height={30}
-      />
-      <span className="font-medium text-black dark:text-white">Exoduz</span>
+      <span className="flex size-8 items-center justify-center rounded-md bg-neutral-950 text-xs font-semibold text-white dark:bg-white dark:text-neutral-950">
+        EX
+      </span>
+      <span className="font-medium text-black dark:text-white">Exoduze</span>
     </Link>
   )
 }

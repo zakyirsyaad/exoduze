@@ -38,10 +38,7 @@ const solanaLogger: NonNullable<SolanaClientConfig["logger"]> = ({
 
   if (level === "info") {
     console.info(`[react-core] ${message}`, payload)
-    return
   }
-
-  console.debug(`[react-core] ${message}`, payload)
 }
 
 const defaultConfig: SolanaClientConfig = {

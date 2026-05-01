@@ -32,6 +32,7 @@ import { NumberTicker } from "@/components/ui/number-ticker"
 import { Separator } from "@/components/ui/separator"
 import type { MarketDetailResponse, MarketNewsResponse } from "@/hooks/Type"
 import { buildMarketCompetitionEntries } from "@/lib/market-competition"
+import { buildPageMetadata } from "@/lib/seo"
 import {
   formatCountdown,
   isApiDateSameOrBeforeNow,
@@ -130,6 +131,28 @@ const getMarketNews = async (slug: string) => {
   return (await response.json()) as MarketNewsResponse
 }
 
+export async function generateMetadata({ params }: MarketPageProps) {
+  const { slug } = await params
+
+  try {
+    const marketDetail = await getMarketDetail(slug)
+    const market = marketDetail.data.market
+
+    return buildPageMetadata({
+      title: market.title,
+      description: market.short_description || market.description,
+      pathname: `/markets/${market.slug}`,
+    })
+  } catch {
+    return buildPageMetadata({
+      title: "Market Detail",
+      description:
+        "Review an Exoduze market, participating AI agents, evidence, and wallet actions.",
+      pathname: `/markets/${slug}`,
+    })
+  }
+}
+
 export default async function MarketPage({ params }: MarketPageProps) {
   const { slug } = await params
   const [marketDetail, marketNewsResponse] = await Promise.all([
@@ -163,7 +186,7 @@ export default async function MarketPage({ params }: MarketPageProps) {
 
   return (
     <UserTimeZoneProvider>
-      <main className="mx-4 space-y-8 pb-10 md:mx-10 xl:mx-20">
+      <main className="mx-auto w-full max-w-[1600px] space-y-8 px-4 pb-10 sm:px-6 lg:px-10 xl:px-20">
         <MarketLiveSync marketIdOrSlug={market.slug} />
         <Link
           href="/"
@@ -172,8 +195,8 @@ export default async function MarketPage({ params }: MarketPageProps) {
           Back to all markets
         </Link>
 
-        <section className="grid gap-8 lg:grid-cols-[340px_1fr]">
-          <div className="space-y-5">
+        <section className="grid min-w-0 gap-8 lg:grid-cols-[340px_minmax(0,1fr)]">
+          <div className="min-w-0 space-y-5">
             <BattleCard
               title={market.title}
               badgeLabel={formatStatusLabel(market.status)}
@@ -207,11 +230,13 @@ export default async function MarketPage({ params }: MarketPageProps) {
 
             <MarketTransparencyCard transparency={market.transparency} />
           </div>
-          <div className="space-y-5">
+          <div className="min-w-0 space-y-5">
             <p className="text-sm font-medium text-neutral-500 uppercase">
               Market Detail
             </p>
-            <h1 className="mt-2 text-3xl font-semibold">{market.title}</h1>
+            <h1 className="mt-2 text-2xl font-semibold md:text-3xl">
+              {market.title}
+            </h1>
             <p className="mt-3 max-w-2xl text-neutral-600 dark:text-neutral-400">
               {market.description}
             </p>
@@ -225,7 +250,7 @@ export default async function MarketPage({ params }: MarketPageProps) {
                 </Badge>
               ))}
             </div>
-            <div className="flex flex-wrap gap-10">
+            <div className="grid gap-5 sm:grid-cols-3">
               <article>
                 <p className="text-sm text-neutral-500">Liquidity</p>
                 <div>
@@ -264,7 +289,7 @@ export default async function MarketPage({ params }: MarketPageProps) {
                 market.fairness.live_agent_decisions_visible_at
               }
             />
-            <section className="grid grid-cols-3 gap-5">
+            <section className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
               <BattleTaskCard
                 market={market}
                 transparency={market.transparency}
@@ -276,7 +301,7 @@ export default async function MarketPage({ params }: MarketPageProps) {
               <BattleTimeline status={market.status} timing={market.timing} />
             </section>
 
-            <section className="grid grid-cols-3 gap-5">
+            <section className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
               <MarketTimingCard timing={market.timing} />
               <ResolutionPanel market={market} agents={agents} />
               <MarketOnchainCard
@@ -284,7 +309,7 @@ export default async function MarketPage({ params }: MarketPageProps) {
                 settlement={market.settlement}
               />
             </section>
-            <section className="grid grid-cols-3 gap-5">
+            <section className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
               <MarketActivityCard
                 decisionEventCount={decisionEventCount}
                 monitoring={monitoring}
@@ -308,7 +333,7 @@ export default async function MarketPage({ params }: MarketPageProps) {
               <MarketWalletContext slug={market.slug} />
             </section>
 
-            <section className="grid grid-cols-2 gap-5">
+            <section className="grid gap-5 xl:grid-cols-2">
               <ParticipatingAgentsCard
                 agents={agents}
                 competitionEntryById={competitionEntryById}

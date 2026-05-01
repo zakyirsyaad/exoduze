@@ -4,6 +4,7 @@ import type { Env } from "../../config/env.js";
 import type { AppDatabase } from "../../db/database.js";
 import { queryOne, queryRows } from "../../db/query.js";
 import { HttpError } from "../../lib/http-error.js";
+import { writeAuditLog } from "../audit/audit-log.js";
 import {
   buildHybridPayoutBreakdownByPositionKey,
   formatSettlementDecimalUnits,
@@ -76,8 +77,23 @@ type PortfolioPayoutRow = {
   onchain_position_ref: string | null;
 };
 
+type PayoutClaimRow = {
+  id: string;
+  gross_usdc: string;
+  fee_usdc: string;
+  net_usdc: string;
+  status: string;
+  market_id: string;
+  market_onchain_pubkey: string | null;
+  onchain_position_ref: string | null;
+};
+
 type RecordClaimInput = {
   txSig: string;
+};
+
+type ServiceLogger = {
+  error?: (input: unknown, message?: string) => void;
 };
 
 export class PortfolioService {
@@ -87,6 +103,7 @@ export class PortfolioService {
     private readonly db: AppDatabase,
     private readonly env: Env,
     private readonly onchainService?: ExoduzeOnchainService,
+    private readonly logger?: ServiceLogger,
   ) {
     this.connection = new Connection(env.SOLANA_RPC_URL, "confirmed");
   }
@@ -165,12 +182,30 @@ export class PortfolioService {
     input: RecordClaimInput,
   ) {
     const wallet = await this.requireWalletIdentity(walletAddress);
-    const payout = await queryOne<{ id: string; status: string }>(
+    const payout = await queryOne<PayoutClaimRow>(
       this.db,
       `
-        SELECT id, status
-        FROM payouts
-        WHERE id = $1 AND wallet_identity_id = $2
+        SELECT
+          p.id,
+          p.gross_usdc::text,
+          p.fee_usdc::text,
+          p.net_usdc::text,
+          p.status,
+          p.market_id,
+          m.onchain_market_pubkey AS market_onchain_pubkey,
+          up.onchain_position_ref
+        FROM payouts p
+        JOIN markets m ON m.id = p.market_id
+        LEFT JOIN LATERAL (
+          SELECT onchain_position_ref
+          FROM user_positions up
+          WHERE up.market_id = p.market_id
+            AND up.market_agent_id = p.market_agent_id
+            AND up.wallet_identity_id = p.wallet_identity_id
+          ORDER BY up.created_at DESC
+          LIMIT 1
+        ) up ON true
+        WHERE p.id = $1 AND p.wallet_identity_id = $2
         LIMIT 1
       `,
       [payoutId, wallet.id],
@@ -188,20 +223,39 @@ export class PortfolioService {
       ? await this.onchainService.getSignatureStatus(input.txSig)
       : null;
     if (signatureStatus?.failed) {
+      await this.auditClaimVerification("failed", wallet.id, payout.id, {
+        market_id: payout.market_id,
+        reason: "ONCHAIN_TX_FAILED",
+      });
       throw new HttpError(409, "ONCHAIN_TX_FAILED", "The payout claim transaction failed.");
     }
 
-    const status =
-      signatureStatus && !signatureStatus.confirmed && signatureStatus.found
-        ? "submitted"
-        : "paid";
+    let status: "paid" | "submitted";
+    if (signatureStatus?.confirmed) {
+      try {
+        status = await this.requireConfirmedOnchainPayoutClaim(
+          wallet.wallet_address,
+          payout,
+          input.txSig,
+        );
+      } catch (error) {
+        await this.auditClaimVerification("failed", wallet.id, payout.id, {
+          market_id: payout.market_id,
+          reason: error instanceof HttpError ? error.code : "CLAIM_VERIFICATION_FAILED",
+        });
+        throw error;
+      }
+    } else {
+      status = "submitted";
+    }
+
     const paidAt = status === "paid" ? new Date().toISOString() : null;
 
     await this.db.query(
       `
         UPDATE payouts
         SET
-          payout_tx_sig = $3,
+          payout_tx_sig = CASE WHEN status = 'paid' THEN payout_tx_sig ELSE $3 END,
           status = CASE WHEN status = 'paid' THEN status ELSE $4 END,
           paid_at = CASE
             WHEN status = 'paid' THEN paid_at
@@ -213,8 +267,178 @@ export class PortfolioService {
       `,
       [payout.id, wallet.id, input.txSig, status, paidAt],
     );
+    if (status === "paid") {
+      await this.auditClaimVerification("succeeded", wallet.id, payout.id, {
+        market_id: payout.market_id,
+        status,
+      });
+    }
 
     return this.getPortfolio(wallet.wallet_address);
+  }
+
+  private async auditClaimVerification(
+    result: "succeeded" | "failed",
+    walletIdentityId: string,
+    payoutId: string,
+    after: Record<string, unknown>,
+  ) {
+    await writeAuditLog(this.db, this.logger, {
+      action: `claim_verification.${result}`,
+      actorType: "wallet",
+      actorWalletIdentityId: walletIdentityId,
+      entityType: "payout",
+      entityId: payoutId,
+      after,
+    });
+  }
+
+  private async requireConfirmedOnchainPayoutClaim(
+    walletAddress: string,
+    payout: PayoutClaimRow,
+    txSig: string,
+  ): Promise<"paid"> {
+    if (!payout.market_onchain_pubkey || !payout.onchain_position_ref) {
+      throw new HttpError(
+        409,
+        "PAYOUT_ONCHAIN_REFERENCE_MISSING",
+        "This payout is missing the on-chain market or position reference.",
+      );
+    }
+
+    if (!this.onchainService) {
+      throw new HttpError(
+        503,
+        "ONCHAIN_CLIENT_NOT_CONFIGURED",
+        "On-chain claim verification is not configured.",
+      );
+    }
+
+    const transaction = await this.onchainService.getTransactionSummary(txSig);
+    if (!transaction) {
+      throw new HttpError(
+        409,
+        "ONCHAIN_TX_NOT_FOUND",
+        "The payout claim transaction could not be fetched or failed on-chain.",
+      );
+    }
+
+    if (!transaction.program_ids.includes(this.env.EXODUZE_PROGRAM_ID)) {
+      throw new HttpError(
+        409,
+        "ONCHAIN_TX_PROGRAM_MISMATCH",
+        "The payout claim transaction was not executed by the configured Exoduze program.",
+      );
+    }
+
+    if (!transaction.account_keys.includes(payout.market_onchain_pubkey)) {
+      throw new HttpError(
+        409,
+        "ONCHAIN_TX_MARKET_MISMATCH",
+        "The payout claim transaction does not reference the expected market account.",
+      );
+    }
+
+    if (!transaction.account_keys.includes(payout.onchain_position_ref)) {
+      throw new HttpError(
+        409,
+        "ONCHAIN_TX_POSITION_MISMATCH",
+        "The payout claim transaction does not reference the expected user position account.",
+      );
+    }
+
+    if (
+      !transaction.account_keys.includes(walletAddress) ||
+      !transaction.signer_keys.includes(walletAddress)
+    ) {
+      throw new HttpError(
+        403,
+        "ONCHAIN_TX_WALLET_MISMATCH",
+        "The payout claim transaction was not signed by the expected payout wallet.",
+      );
+    }
+
+    const position = await this.onchainService.getPosition(payout.onchain_position_ref);
+    if (!position) {
+      throw new HttpError(
+        409,
+        "ONCHAIN_POSITION_NOT_FOUND",
+        "The expected on-chain position was not found.",
+      );
+    }
+
+    if (position.market !== payout.market_onchain_pubkey) {
+      throw new HttpError(
+        409,
+        "ONCHAIN_POSITION_MARKET_MISMATCH",
+        "The on-chain position belongs to a different market.",
+      );
+    }
+
+    if (position.user !== walletAddress) {
+      throw new HttpError(
+        403,
+        "ONCHAIN_POSITION_OWNER_MISMATCH",
+        "The on-chain position belongs to a different wallet.",
+      );
+    }
+
+    if (position.status !== "CLAIMED") {
+      throw new HttpError(
+        409,
+        "ONCHAIN_PAYOUT_NOT_CLAIMED",
+        "The on-chain position has not been claimed yet.",
+      );
+    }
+
+    const expectedPayoutBaseUnits = this.parseUsdcBaseUnits(payout.net_usdc);
+    const claimedAmountBaseUnits = BigInt(position.claimed_amount_base_units);
+    if (claimedAmountBaseUnits <= 0n) {
+      throw new HttpError(
+        409,
+        "ONCHAIN_CLAIM_EMPTY",
+        "The on-chain claim did not transfer a positive payout.",
+      );
+    }
+
+    if (claimedAmountBaseUnits !== expectedPayoutBaseUnits) {
+      throw new HttpError(
+        409,
+        "ONCHAIN_CLAIM_AMOUNT_MISMATCH",
+        "The on-chain claim amount does not match the expected backend payout.",
+      );
+    }
+
+    return "paid";
+  }
+
+  private parseUsdcBaseUnits(value: string) {
+    const normalized = value.trim();
+    const match = /^(\d+)(?:\.(\d+))?$/.exec(normalized);
+    if (!match) {
+      throw new HttpError(
+        409,
+        "PAYOUT_AMOUNT_INVALID",
+        "The expected payout amount is not a valid USDC decimal.",
+      );
+    }
+
+    const fractionalPart = match[2] ?? "";
+    const wholePart = match[1] ?? "0";
+    const baseFraction = fractionalPart.slice(0, 6);
+    const extraFraction = fractionalPart.slice(6);
+    if (/[1-9]/.test(extraFraction)) {
+      throw new HttpError(
+        409,
+        "PAYOUT_AMOUNT_PRECISION_UNSUPPORTED",
+        "The expected payout amount has more precision than the settlement mint supports.",
+      );
+    }
+
+    return (
+      BigInt(wholePart) * 1_000_000n +
+      BigInt(baseFraction.padEnd(6, "0") || "0")
+    );
   }
 
   private async requireWalletIdentity(walletAddress: string) {

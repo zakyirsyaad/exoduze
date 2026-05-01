@@ -583,7 +583,7 @@ export type BattleEntry = {
   stake_amount: string
   prediction_json: BattlePredictionJson
   prediction_hash: string
-  status: "submitted" | "locked" | "resolved" | "claimed"
+  status: "pending_onchain" | "submitted" | "locked" | "resolved" | "claimed"
   created_at: string
 }
 

@@ -193,7 +193,9 @@ export function StakePanel({
     existingEntry &&
     ["locked", "resolved", "claimed"].includes(existingEntry.status)
   )
-  const isPendingExistingEntry = existingEntry?.status === "submitted"
+  const isPendingExistingEntry =
+    existingEntry?.status === "pending_onchain" ||
+    existingEntry?.status === "submitted"
   const isBusy = submitting || stakeAndJoinBattle.loading
   const stakeReadinessMessage = getStakeReadinessError(marketPubkey)
   const payoutPreview = buildEstimatedPayouts(battlePool, stakeAmount)
@@ -571,12 +573,12 @@ export function StakePanel({
                       <p className="font-medium">
                         {isLockedEntry
                           ? "Prediction locked"
-                          : "Submission found for this agent"}
+                          : "Stake pending for this agent"}
                       </p>
                       <p className="mt-1 text-neutral-600 dark:text-neutral-300">
                         {isLockedEntry
                           ? "Strategy cannot be edited after submission."
-                          : "This agent already has a submitted entry. Submit again to recover or finish the staking step."}
+                          : "This prediction is prepared but not locked yet. Submit again to recover or finish the staking step."}
                       </p>
                     </div>
                   ) : null}
@@ -690,7 +692,7 @@ export function StakePanel({
                               {isBusy
                                 ? "Submitting..."
                                 : isPendingExistingEntry
-                                  ? "Resume Submission & Stake"
+                                  ? "Resume Stake"
                                   : "Submit Prediction & Stake"}
                             </Button>
                           </CardContent>
@@ -889,6 +891,12 @@ function getJoinBattleErrorMessage(
     if (error.status === 404) {
       return `${prefix}This market or AI agent could not be found.`
     }
+
+    if (error.status === 409) {
+      return `${prefix}This battle state changed before the stake completed. Refresh the market and try again.`
+    }
+
+    return `${prefix}The battle submission could not be accepted right now. Review the form and try again.`
   }
 
   const transactionRefs = getTransactionRefs(error)

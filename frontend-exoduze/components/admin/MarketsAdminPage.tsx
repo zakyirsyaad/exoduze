@@ -405,7 +405,11 @@ export function MarketsAdminPage() {
                 </CardDescription>
               </CardHeader>
               <CardContent className="grid gap-3">
+                <label htmlFor="admin-market-search" className="text-sm text-neutral-500">
+                  Search markets
+                </label>
                 <Input
+                  id="admin-market-search"
                   value={search}
                   onChange={(event) => setSearch(event.target.value)}
                   placeholder="Search by title, slug, or category"
@@ -443,7 +447,10 @@ export function MarketsAdminPage() {
                       </button>
                     ))
                   ) : (
-                    <p className="text-sm text-neutral-500">No markets found.</p>
+                    <div className="rounded-md border border-dashed border-black/10 p-4 text-sm text-neutral-500 dark:border-white/10">
+                      No markets match this search. Clear the search or create a
+                      new draft.
+                    </div>
                   )}
                 </div>
               </CardContent>
