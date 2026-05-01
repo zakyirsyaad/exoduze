@@ -170,6 +170,7 @@ If local startup fails with `getaddrinfo ENOTFOUND db.<project-ref>.supabase.co`
 - `AI_DECISION_PROVIDER=mock` is the local battle-prediction fallback and does not call a live model.
 - `AI_DECISION_PROVIDER=heuristic` remains supported for local non-battle AI decisions; battle predictions treat it as local mock mode outside staging/production.
 - `AI_DECISION_PROVIDER=openai` uses the OpenAI Responses API with structured JSON output; configure `OPENAI_API_KEY` and `OPENAI_MODEL`.
+- `AI_DECISION_PROVIDER=openrouter` uses OpenRouter Chat Completions with structured JSON output; configure `OPENROUTER_API_KEY` and `OPENROUTER_MODEL` (defaults to `openrouter/owl-alpha`).
 
 ## Supabase notes
 

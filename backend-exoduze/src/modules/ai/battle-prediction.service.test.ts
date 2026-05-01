@@ -63,7 +63,73 @@ test("provider=openai uses AiDecisionService and does not call generateMockPredi
   }
 });
 
-test("staging battle predictions fail closed unless provider=openai is explicit", async () => {
+test("provider=openrouter uses OpenRouter chat completions and validated JSON", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalProvider = process.env.AI_DECISION_PROVIDER;
+  process.env.AI_DECISION_PROVIDER = "openrouter";
+
+  let fetchCalls = 0;
+  globalThis.fetch = (async (url, init) => {
+    fetchCalls += 1;
+
+    assert.equal(url, "https://openrouter.test/api/v1/chat/completions");
+    const headers = init?.headers as Record<string, string>;
+    assert.equal(headers.Authorization, "Bearer test-openrouter-key");
+    assert.equal(headers["X-OpenRouter-Title"], "Exoduze Test");
+
+    const requestBody = JSON.parse(String(init?.body));
+    assert.equal(requestBody.model, "openrouter/owl-alpha");
+    assert.equal(requestBody.max_tokens, 250);
+    assert.equal(requestBody.response_format.type, "json_schema");
+    assert.equal(requestBody.response_format.json_schema.name, "agent_market_decision");
+    assert.equal(requestBody.response_format.json_schema.strict, true);
+    assert.equal(requestBody.provider.require_parameters, true);
+
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                decision_side: "no",
+                confidence: 0.74,
+                reason_summary: "OpenRouter-backed decision favors NO from the supplied battle context.",
+                key_signals: ["strategy=preset momentum", "market context weakens yes"],
+                risk_factors: ["News can still shift before close"],
+              }),
+            },
+          },
+        ],
+      }),
+    } as Response;
+  }) as typeof fetch;
+
+  try {
+    const service = new BattlePredictionService(buildEnv("openrouter"));
+    const result = await service.generatePrediction(buildInput());
+
+    assert.equal(fetchCalls, 1);
+    assert.equal(result.provider, "openrouter");
+    assert.equal(result.model, "openrouter/owl-alpha");
+    assert.equal(result.prediction.direction, "no");
+    assert.equal(result.prediction.confidence, 0.74);
+    assert.equal(
+      result.prediction.reasoningSummary,
+      "OpenRouter-backed decision favors NO from the supplied battle context.",
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalProvider === undefined) {
+      delete process.env.AI_DECISION_PROVIDER;
+    } else {
+      process.env.AI_DECISION_PROVIDER = originalProvider;
+    }
+  }
+});
+
+test("staging battle predictions fail closed unless a live provider is explicit", async () => {
   const originalAppEnv = process.env.APP_ENV;
   const originalProvider = process.env.AI_DECISION_PROVIDER;
   process.env.APP_ENV = "staging";
@@ -74,7 +140,7 @@ test("staging battle predictions fail closed unless provider=openai is explicit"
 
     await assert.rejects(
       () => service.generatePrediction(buildInput()),
-      /AI_DECISION_PROVIDER must be explicitly set to openai/,
+      /AI_DECISION_PROVIDER must be explicitly set to openai or openrouter/,
     );
 
     process.env.AI_DECISION_PROVIDER = "mock";
@@ -82,7 +148,7 @@ test("staging battle predictions fail closed unless provider=openai is explicit"
 
     await assert.rejects(
       () => mockService.generatePrediction(buildInput()),
-      /AI_DECISION_PROVIDER must be explicitly set to openai/,
+      /AI_DECISION_PROVIDER must be explicitly set to openai or openrouter/,
     );
   } finally {
     if (originalAppEnv === undefined) {
@@ -173,7 +239,7 @@ test("provider=openai rejects AI responses with unexpected fields", async () => 
   }
 });
 
-function buildEnv(provider: "mock" | "heuristic" | "openai") {
+function buildEnv(provider: "mock" | "heuristic" | "openai" | "openrouter") {
   return {
     AI_DECISION_PROVIDER: provider,
     AI_CANONICALIZATION_VERSION: "test-v1",
@@ -181,6 +247,11 @@ function buildEnv(provider: "mock" | "heuristic" | "openai") {
     OPENAI_BASE_URL: "https://api.openai.test/v1",
     OPENAI_MODEL: "gpt-test",
     OPENAI_DECISION_MAX_OUTPUT_TOKENS: 200,
+    OPENROUTER_API_KEY: "test-openrouter-key",
+    OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
+    OPENROUTER_MODEL: "openrouter/owl-alpha",
+    OPENROUTER_DECISION_MAX_TOKENS: 250,
+    OPENROUTER_APP_NAME: "Exoduze Test",
   } as unknown as Env;
 }
 

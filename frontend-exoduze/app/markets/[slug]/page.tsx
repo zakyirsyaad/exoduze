@@ -282,6 +282,7 @@ export default async function MarketPage({ params }: MarketPageProps) {
             <Curve
               entries={competitionEntries}
               marketTitle={market.title}
+              marketEndsAt={market.timing.closes_at}
               liveDecisionsVisible={
                 market.fairness.live_agent_decisions_visible
               }

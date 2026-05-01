@@ -123,7 +123,8 @@ const RISK_PROFILE_CONFIDENCE_BIAS: Record<RiskProfile, number> = {
   aggressive: 0.04,
 };
 
-type BattlePredictionProvider = "mock" | "openai";
+type BattlePredictionProvider = "mock" | "openai" | "openrouter";
+type LiveBattlePredictionProvider = Exclude<BattlePredictionProvider, "mock">;
 
 export class BattlePredictionService {
   constructor(private readonly env: Env) {}
@@ -133,8 +134,8 @@ export class BattlePredictionService {
   ): Promise<BattlePredictionResult> {
     const provider = this.resolvePredictionProvider();
 
-    if (provider === "openai") {
-      return this.generateOpenAiPrediction(input);
+    if (provider === "openai" || provider === "openrouter") {
+      return this.generateAiProviderPrediction(input, provider);
     }
 
     return this.generateMockPredictionResult(input);
@@ -165,10 +166,11 @@ export class BattlePredictionService {
     };
   }
 
-  private async generateOpenAiPrediction(
+  private async generateAiProviderPrediction(
     input: GenerateBattlePredictionInput,
+    provider: LiveBattlePredictionProvider,
   ): Promise<BattlePredictionResult> {
-    const aiDecisionService = new AiDecisionService(this.buildOpenAiRuntimeConfig());
+    const aiDecisionService = new AiDecisionService(this.buildAiRuntimeConfig(provider));
     const aiDecision = await aiDecisionService.generateDecision(
       this.buildAiDecisionInput(input),
     );
@@ -201,15 +203,24 @@ export class BattlePredictionService {
     };
   }
 
-  private buildOpenAiRuntimeConfig(): AiDecisionRuntimeConfig {
+  private buildAiRuntimeConfig(
+    provider: LiveBattlePredictionProvider,
+  ): AiDecisionRuntimeConfig {
     return {
-      AI_DECISION_PROVIDER: "openai",
+      AI_DECISION_PROVIDER: provider,
       AI_CANONICALIZATION_VERSION: this.env.AI_CANONICALIZATION_VERSION,
       OPENAI_API_KEY: this.env.OPENAI_API_KEY,
       OPENAI_BASE_URL: this.env.OPENAI_BASE_URL,
       OPENAI_MODEL: this.env.OPENAI_MODEL,
       OPENAI_DECISION_MAX_OUTPUT_TOKENS:
         this.env.OPENAI_DECISION_MAX_OUTPUT_TOKENS,
+      OPENROUTER_API_KEY: this.env.OPENROUTER_API_KEY,
+      OPENROUTER_BASE_URL: this.env.OPENROUTER_BASE_URL,
+      OPENROUTER_MODEL: this.env.OPENROUTER_MODEL,
+      OPENROUTER_DECISION_MAX_TOKENS:
+        this.env.OPENROUTER_DECISION_MAX_TOKENS,
+      OPENROUTER_SITE_URL: this.env.OPENROUTER_SITE_URL,
+      OPENROUTER_APP_NAME: this.env.OPENROUTER_APP_NAME,
     };
   }
 
@@ -382,15 +393,22 @@ export class BattlePredictionService {
 
     if (isProtectedRuntime()) {
       const configuredProvider = process.env.AI_DECISION_PROVIDER?.trim();
-      if (!configuredProvider || provider !== "openai") {
+      if (
+        !configuredProvider ||
+        (provider !== "openai" && provider !== "openrouter")
+      ) {
         throw new Error(
-          "AI_DECISION_PROVIDER must be explicitly set to openai for battle predictions in staging/production.",
+          "AI_DECISION_PROVIDER must be explicitly set to openai or openrouter for battle predictions in staging/production.",
         );
       }
     }
 
     if (provider === "openai") {
       return "openai";
+    }
+
+    if (provider === "openrouter") {
+      return "openrouter";
     }
 
     if (provider === "mock") {
@@ -404,7 +422,7 @@ export class BattlePredictionService {
     }
 
     throw new Error(
-      "Battle predictions require AI_DECISION_PROVIDER=openai, or AI_DECISION_PROVIDER=mock in local/development/test.",
+      "Battle predictions require AI_DECISION_PROVIDER=openai or openrouter, or AI_DECISION_PROVIDER=mock in local/development/test.",
     );
   }
 }

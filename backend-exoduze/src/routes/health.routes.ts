@@ -85,22 +85,36 @@ async function checkSolanaRpc(
 }
 
 function checkAiProvider(env: Env): ReadinessCheck {
-  if (env.AI_DECISION_PROVIDER !== "openai") {
+  if (env.AI_DECISION_PROVIDER === "openai") {
+    if (!env.OPENAI_API_KEY) {
+      return {
+        status: "misconfigured",
+        message: "openai provider selected without an api key",
+      };
+    }
+
     return {
       status: "ok",
-      message: `provider=${env.AI_DECISION_PROVIDER}`,
+      message: "provider=openai",
     };
   }
 
-  if (!env.OPENAI_API_KEY) {
+  if (env.AI_DECISION_PROVIDER === "openrouter") {
+    if (!env.OPENROUTER_API_KEY) {
+      return {
+        status: "misconfigured",
+        message: "openrouter provider selected without an api key",
+      };
+    }
+
     return {
-      status: "misconfigured",
-      message: "openai provider selected without an api key",
+      status: "ok",
+      message: "provider=openrouter",
     };
   }
 
   return {
     status: "ok",
-    message: "provider=openai",
+    message: `provider=${env.AI_DECISION_PROVIDER}`,
   };
 }

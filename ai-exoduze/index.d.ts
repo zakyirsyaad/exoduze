@@ -1,5 +1,5 @@
 export type AiDecisionSide = "yes" | "no" | "abstain";
-export type AiDecisionProviderName = "heuristic" | "openai";
+export type AiDecisionProviderName = "heuristic" | "openai" | "openrouter";
 
 export type AiDecisionRuntimeConfig = {
   AI_DECISION_PROVIDER: AiDecisionProviderName;
@@ -8,6 +8,12 @@ export type AiDecisionRuntimeConfig = {
   OPENAI_BASE_URL: string;
   OPENAI_MODEL: string;
   OPENAI_DECISION_MAX_OUTPUT_TOKENS: number;
+  OPENROUTER_API_KEY?: string | undefined;
+  OPENROUTER_BASE_URL?: string | undefined;
+  OPENROUTER_MODEL?: string | undefined;
+  OPENROUTER_DECISION_MAX_TOKENS?: number | undefined;
+  OPENROUTER_SITE_URL?: string | undefined;
+  OPENROUTER_APP_NAME?: string | undefined;
 };
 
 export type AiMarketContext = {
@@ -130,6 +136,16 @@ export declare class HeuristicDecisionProvider implements AiDecisionProvider {
 
 export declare class OpenAiDecisionProvider implements AiDecisionProvider {
   readonly name: "openai";
+  readonly model: string;
+  constructor(env: AiDecisionRuntimeConfig);
+  decide(prompt: AiPromptArtifact): Promise<{
+    decision: AiDecisionResponse;
+    rawResponse: unknown;
+  }>;
+}
+
+export declare class OpenRouterDecisionProvider implements AiDecisionProvider {
+  readonly name: "openrouter";
   readonly model: string;
   constructor(env: AiDecisionRuntimeConfig);
   decide(prompt: AiPromptArtifact): Promise<{

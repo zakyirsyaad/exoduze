@@ -6,14 +6,14 @@ import type {
 import { getApiDateTimestamp } from "@/lib/time-formatters"
 
 const AGENT_SERIES_COLORS = [
-  "#2563eb",
-  "#16a34a",
-  "#ea580c",
-  "#7c3aed",
-  "#dc2626",
-  "#0891b2",
-  "#ca8a04",
-  "#db2777",
+  "#d7ff3f",
+  "#ff6b4a",
+  "#f044a8",
+  "#24d6c8",
+  "#8b5cf6",
+  "#38bdf8",
+  "#fbbf24",
+  "#f472b6",
 ] as const
 
 export type MarketCompetitionPoint = {

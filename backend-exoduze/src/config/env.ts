@@ -43,12 +43,18 @@ const envSchema = z.object({
   SUPABASE_URL: optionalUrlSchema,
   SUPABASE_SERVICE_ROLE_KEY: optionalStringSchema,
   SUPABASE_AGENT_AVATARS_BUCKET: z.string().min(1).default("agent-avatars"),
-  AI_DECISION_PROVIDER: z.enum(["mock", "heuristic", "openai"]).default("heuristic"),
+  AI_DECISION_PROVIDER: z.enum(["mock", "heuristic", "openai", "openrouter"]).default("heuristic"),
   AI_CANONICALIZATION_VERSION: z.string().min(1).default("exoduze-ai-v1"),
   OPENAI_API_KEY: optionalStringSchema,
   OPENAI_BASE_URL: z.string().url().default("https://api.openai.com/v1"),
   OPENAI_MODEL: z.string().min(1).default("gpt-5.4-mini"),
   OPENAI_DECISION_MAX_OUTPUT_TOKENS: z.coerce.number().int().positive().default(900),
+  OPENROUTER_API_KEY: optionalStringSchema,
+  OPENROUTER_BASE_URL: z.string().url().default("https://openrouter.ai/api/v1"),
+  OPENROUTER_MODEL: z.string().min(1).default("openrouter/owl-alpha"),
+  OPENROUTER_DECISION_MAX_TOKENS: z.coerce.number().int().positive().default(900),
+  OPENROUTER_SITE_URL: optionalUrlSchema,
+  OPENROUTER_APP_NAME: z.string().min(1).default("Exoduze"),
   FEED_REFRESH_TTL_MINUTES: z.coerce.number().int().positive().default(20),
   MARKET_DEFAULT_JOIN_WINDOW_RATIO: z.coerce.number().positive().max(1).default(0.25),
   MARKET_DEFAULT_MIN_JOIN_WINDOW_HOURS: z.coerce.number().int().nonnegative().default(6),
@@ -104,12 +110,16 @@ const envSchema = z.object({
     addEnvIssue(ctx, "PAYOUT_TOP_AGENT_BONUS_BPS", "PAYOUT_TOP_AGENT_BONUS_BPS must be 0 unless the deployed smart contract supports bonus payouts.");
   }
 
-  if (value.AI_DECISION_PROVIDER !== "openai" || !hasExplicitEnv("AI_DECISION_PROVIDER")) {
-    addEnvIssue(ctx, "AI_DECISION_PROVIDER", "AI_DECISION_PROVIDER must be explicitly set to openai in staging/production.");
+  if (!["openai", "openrouter"].includes(value.AI_DECISION_PROVIDER) || !hasExplicitEnv("AI_DECISION_PROVIDER")) {
+    addEnvIssue(ctx, "AI_DECISION_PROVIDER", "AI_DECISION_PROVIDER must be explicitly set to openai or openrouter in staging/production.");
   }
 
-  if (!value.OPENAI_API_KEY) {
+  if (value.AI_DECISION_PROVIDER === "openai" && !value.OPENAI_API_KEY) {
     addEnvIssue(ctx, "OPENAI_API_KEY", "OPENAI_API_KEY must be set when AI_DECISION_PROVIDER=openai in staging/production.");
+  }
+
+  if (value.AI_DECISION_PROVIDER === "openrouter" && !value.OPENROUTER_API_KEY) {
+    addEnvIssue(ctx, "OPENROUTER_API_KEY", "OPENROUTER_API_KEY must be set when AI_DECISION_PROVIDER=openrouter in staging/production.");
   }
 
   for (const key of [

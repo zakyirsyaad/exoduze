@@ -78,6 +78,10 @@ export class AiDecisionService {
       return new OpenAiDecisionProvider(this.env);
     }
 
+    if (this.env.AI_DECISION_PROVIDER === "openrouter") {
+      return new OpenRouterDecisionProvider(this.env);
+    }
+
     return new HeuristicDecisionProvider();
   }
 }
@@ -105,8 +109,8 @@ export class AiPromptBuilder {
     };
     const runtimeConfig = {
       provider: this.env.AI_DECISION_PROVIDER,
-      model: this.env.OPENAI_MODEL,
-      max_output_tokens: this.env.OPENAI_DECISION_MAX_OUTPUT_TOKENS,
+      model: getConfiguredModel(this.env),
+      max_output_tokens: getConfiguredMaxOutputTokens(this.env),
       schema: "exoduze.agent_market_decision.v1",
     };
     const systemPrompt = [
@@ -276,6 +280,73 @@ export class OpenAiDecisionProvider {
   }
 }
 
+export class OpenRouterDecisionProvider {
+  name = "openrouter";
+
+  constructor(env) {
+    this.env = env;
+    this.model = env.OPENROUTER_MODEL ?? "openrouter/owl-alpha";
+  }
+
+  async decide(prompt) {
+    if (!this.env.OPENROUTER_API_KEY) {
+      throw new Error(
+        "OPENROUTER_API_KEY must be configured to use OpenRouter decisions.",
+      );
+    }
+
+    const response = await fetch(
+      `${trimTrailingSlash(this.env.OPENROUTER_BASE_URL ?? "https://openrouter.ai/api/v1")}/chat/completions`,
+      {
+        method: "POST",
+        headers: buildOpenRouterHeaders(this.env),
+        body: JSON.stringify({
+          model: this.model,
+          max_tokens: getConfiguredMaxOutputTokens(this.env),
+          messages: [
+            {
+              role: "system",
+              content: prompt.systemPrompt,
+            },
+            {
+              role: "user",
+              content: prompt.userPrompt,
+            },
+          ],
+          response_format: {
+            type: "json_schema",
+            json_schema: {
+              name: "agent_market_decision",
+              strict: true,
+              schema: aiDecisionJsonSchema,
+            },
+          },
+          provider: {
+            require_parameters: true,
+          },
+        }),
+      },
+    );
+
+    const body = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(
+        `OpenRouter decision request failed with HTTP ${response.status}${formatProviderError(body)}.`,
+      );
+    }
+
+    const outputText = extractChatMessageText(body);
+    if (!outputText) {
+      throw new Error("OpenRouter returned an empty decision response.");
+    }
+
+    return {
+      decision: validateDecisionResponse(JSON.parse(outputText)),
+      rawResponse: body,
+    };
+  }
+}
+
 function validateDecisionResponse(value) {
   if (!value || typeof value !== "object") {
     throw new Error("AI decision response must be an object.");
@@ -358,6 +429,83 @@ function extractOutputText(response) {
   }
 
   return null;
+}
+
+function extractChatMessageText(response) {
+  const content = response?.choices?.[0]?.message?.content;
+  if (typeof content === "string") {
+    return content;
+  }
+
+  if (Array.isArray(content)) {
+    const text = content
+      .map((part) => {
+        if (typeof part === "string") {
+          return part;
+        }
+
+        if (typeof part?.text === "string") {
+          return part.text;
+        }
+
+        if (typeof part?.content === "string") {
+          return part.content;
+        }
+
+        return "";
+      })
+      .join("")
+      .trim();
+
+    return text || null;
+  }
+
+  return null;
+}
+
+function buildOpenRouterHeaders(env) {
+  const headers = {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${env.OPENROUTER_API_KEY}`,
+  };
+
+  if (env.OPENROUTER_SITE_URL) {
+    headers["HTTP-Referer"] = env.OPENROUTER_SITE_URL;
+  }
+
+  if (env.OPENROUTER_APP_NAME) {
+    headers["X-OpenRouter-Title"] = env.OPENROUTER_APP_NAME;
+  }
+
+  return headers;
+}
+
+function formatProviderError(response) {
+  const message = response?.error?.message;
+  return typeof message === "string" && message ? `: ${message}` : "";
+}
+
+function getConfiguredModel(env) {
+  if (env.AI_DECISION_PROVIDER === "openrouter") {
+    return env.OPENROUTER_MODEL ?? "openrouter/owl-alpha";
+  }
+
+  return env.OPENAI_MODEL;
+}
+
+function getConfiguredMaxOutputTokens(env) {
+  if (env.AI_DECISION_PROVIDER === "openrouter") {
+    return (
+      env.OPENROUTER_DECISION_MAX_TOKENS ??
+      env.OPENAI_DECISION_MAX_OUTPUT_TOKENS
+    );
+  }
+
+  return env.OPENAI_DECISION_MAX_OUTPUT_TOKENS;
+}
+
+function trimTrailingSlash(value) {
+  return value.replace(/\/+$/, "");
 }
 
 function countMatches(text, tokens) {

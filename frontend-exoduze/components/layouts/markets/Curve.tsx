@@ -36,12 +36,14 @@ import {
 type CurveProps = {
   entries: MarketCompetitionEntry[]
   marketTitle: string
+  marketEndsAt: string
   liveDecisionsVisible: boolean
   liveDecisionsVisibleAt: string
 }
 
 type CurveRow = {
   recordedAt: string
+  recordedAtTimestamp: number
   [key: string]: number | string | null
 }
 
@@ -53,6 +55,7 @@ const stakeFormatter = new Intl.NumberFormat("en-US", {
 export function Curve({
   entries,
   marketTitle,
+  marketEndsAt,
   liveDecisionsVisible,
   liveDecisionsVisibleAt,
 }: CurveProps) {
@@ -70,8 +73,40 @@ export function Curve({
       ),
     [entries]
   )
-  const chartData = React.useMemo(() => buildChartData(entries), [entries])
-  const latestRecordedAt = chartData.at(-1)?.recordedAt ?? null
+  const chartData = React.useMemo(
+    () => buildChartData(entries, liveDecisionsVisibleAt, marketEndsAt),
+    [entries, liveDecisionsVisibleAt, marketEndsAt]
+  )
+  const latestDecisionRecordedAt = React.useMemo(
+    () => getLatestDecisionRecordedAt(entries),
+    [entries]
+  )
+  const latestDecisionTimestamp = getApiDateTimestamp(latestDecisionRecordedAt)
+  const chartStartTimestamp =
+    getApiDateTimestamp(liveDecisionsVisibleAt) ??
+    chartData.at(0)?.recordedAtTimestamp ??
+    null
+  const chartEndTimestamp =
+    getApiDateTimestamp(marketEndsAt) ??
+    chartData.at(-1)?.recordedAtTimestamp ??
+    null
+  const chartTimeDomain = React.useMemo(
+    () =>
+      chartStartTimestamp !== null &&
+        chartEndTimestamp !== null &&
+        chartStartTimestamp < chartEndTimestamp
+        ? ([chartStartTimestamp, chartEndTimestamp] as [number, number])
+        : undefined,
+    [chartStartTimestamp, chartEndTimestamp]
+  )
+  const chartTimeTicks = React.useMemo(
+    () => buildTimeTicks(chartTimeDomain),
+    [chartTimeDomain]
+  )
+  const chartEndAt = chartData.at(-1)?.recordedAt ?? null
+  const showLatestDecisionLine =
+    latestDecisionTimestamp !== null &&
+    !isSameApiTimestamp(latestDecisionRecordedAt, chartEndAt)
   const totalDecisionEvents = entries.reduce(
     (total, entry) => total + entry.points.length,
     0
@@ -126,13 +161,17 @@ export function Curve({
                 tickFormatter={(value) => `${value}%`}
               />
               <XAxis
-                dataKey="recordedAt"
+                dataKey="recordedAtTimestamp"
+                type="number"
+                scale="time"
+                domain={chartTimeDomain}
+                ticks={chartTimeTicks}
                 tickLine={false}
                 axisLine={false}
                 tickMargin={8}
                 minTickGap={32}
                 tickFormatter={(value) =>
-                  formatClockTimeForTimeZone(String(value), { timeZone })
+                  formatTimestampClockForTimeZone(value, { timeZone })
                 }
               />
               <ChartTooltip
@@ -140,8 +179,11 @@ export function Curve({
                 content={
                   <ChartTooltipContent
                     indicator="line"
-                    labelFormatter={(value) =>
-                      formatDateTimeForTimeZone(String(value), { timeZone })
+                    labelFormatter={(_value, payload) =>
+                      formatDateTimeForTimeZone(
+                        payload?.[0]?.payload?.recordedAt,
+                        { timeZone }
+                      )
                     }
                     formatter={(value, name) => {
                       const seriesName = entries.find(
@@ -158,9 +200,9 @@ export function Curve({
                   />
                 }
               />
-              {latestRecordedAt ? (
+              {showLatestDecisionLine ? (
                 <ReferenceLine
-                  x={latestRecordedAt}
+                  x={latestDecisionTimestamp}
                   stroke="hsl(var(--muted-foreground))"
                   strokeDasharray="4 4"
                   ifOverflow="extendDomain"
@@ -201,7 +243,7 @@ export function Curve({
           </div>
         )}
 
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
           {entries.map((entry) => (
             <article
               key={`curve-entry-${entry.marketAgentId}`}
@@ -262,9 +304,9 @@ export function Curve({
                   <p className="mt-1 font-medium">
                     {entry.currentDecision?.decided_at
                       ? formatClockTimeForTimeZone(
-                          entry.currentDecision.decided_at,
-                          { timeZone }
-                        )
+                        entry.currentDecision.decided_at,
+                        { timeZone }
+                      )
                       : "TBD"}
                   </p>
                 </div>
@@ -283,13 +325,19 @@ export function Curve({
               </p>
               <p>
                 Latest update{" "}
-                {latestRecordedAt
-                  ? formatDateTimeForTimeZone(latestRecordedAt, { timeZone })
+                {latestDecisionRecordedAt
+                  ? formatDateTimeForTimeZone(latestDecisionRecordedAt, {
+                    timeZone,
+                  })
                   : "unavailable"}
                 . {totalDecisionEvents} visible decision events across{" "}
                 {entries.length} agents, with{" "}
                 {formatStakeValue(totalFollowerStake)} of tracked support in
-                this market.
+                this market. Curve extends through{" "}
+                {chartEndAt
+                  ? formatDateTimeForTimeZone(chartEndAt, { timeZone })
+                  : "the market end"}
+                .
               </p>
             </>
           ) : (
@@ -305,25 +353,111 @@ export function Curve({
   )
 }
 
-function buildChartData(entries: MarketCompetitionEntry[]) {
+function buildChartData(
+  entries: MarketCompetitionEntry[],
+  windowStartsAt: string,
+  marketEndsAt: string
+) {
   const timestamps = Array.from(
     new Set(
       entries.flatMap((entry) => entry.points.map((point) => point.recordedAt))
     )
   ).sort(compareApiDateStrings)
+  const chartTimestamps = buildChartTimeline(
+    timestamps,
+    windowStartsAt,
+    marketEndsAt
+  )
 
-  return timestamps.map<CurveRow>((timestamp) => {
+  return chartTimestamps.map<CurveRow>((timestamp) => {
     const row: CurveRow = {
-      recordedAt: timestamp,
+      recordedAt: timestamp.recordedAt,
+      recordedAtTimestamp: timestamp.recordedAtTimestamp,
     }
 
     for (const entry of entries) {
-      const latestPoint = findLatestPointAtOrBefore(entry, timestamp)
+      const latestPoint = findLatestPointAtOrBefore(entry, timestamp.recordedAt)
       row[entry.key] = latestPoint?.yesProbability ?? null
     }
 
     return row
   })
+}
+
+function buildChartTimeline(
+  timestamps: string[],
+  windowStartsAt: string,
+  terminalAt: string
+) {
+  if (timestamps.length === 0) {
+    return []
+  }
+
+  const timelineByTimestamp = new Map<number, string>()
+  const addTimestamp = (value: string) => {
+    const timestamp = getApiDateTimestamp(value)
+
+    if (timestamp === null) {
+      return
+    }
+
+    if (!timelineByTimestamp.has(timestamp)) {
+      timelineByTimestamp.set(timestamp, value)
+    }
+  }
+
+  addTimestamp(windowStartsAt)
+
+  for (const timestamp of timestamps) {
+    addTimestamp(timestamp)
+  }
+
+  addTimestamp(terminalAt)
+
+  return Array.from(timelineByTimestamp.entries())
+    .sort(([left], [right]) => left - right)
+    .map(([recordedAtTimestamp, recordedAt]) => ({
+      recordedAt,
+      recordedAtTimestamp,
+    }))
+}
+
+function buildTimeTicks(domain?: [number, number]) {
+  if (!domain) {
+    return undefined
+  }
+
+  const [startTimestamp, endTimestamp] = domain
+  const tickCount = 5
+  const step = (endTimestamp - startTimestamp) / (tickCount - 1)
+
+  return Array.from({ length: tickCount }, (_item, index) =>
+    index === tickCount - 1
+      ? endTimestamp
+      : Math.round(startTimestamp + step * index)
+  )
+}
+
+function getLatestDecisionRecordedAt(entries: MarketCompetitionEntry[]) {
+  let latestTimestamp: number | null = null
+  let latestRecordedAt: string | null = null
+
+  for (const entry of entries) {
+    for (const point of entry.points) {
+      const pointTimestamp = getApiDateTimestamp(point.recordedAt)
+
+      if (pointTimestamp === null) {
+        continue
+      }
+
+      if (latestTimestamp === null || pointTimestamp > latestTimestamp) {
+        latestTimestamp = pointTimestamp
+        latestRecordedAt = point.recordedAt
+      }
+    }
+  }
+
+  return latestRecordedAt
 }
 
 function findLatestPointAtOrBefore(
@@ -352,6 +486,28 @@ function findLatestPointAtOrBefore(
   }
 
   return latestPoint
+}
+
+function isSameApiTimestamp(left?: string | null, right?: string | null) {
+  const leftTimestamp = getApiDateTimestamp(left)
+  const rightTimestamp = getApiDateTimestamp(right)
+
+  return leftTimestamp !== null && leftTimestamp === rightTimestamp
+}
+
+function formatTimestampClockForTimeZone(
+  value: number | string,
+  { timeZone }: { timeZone: string }
+) {
+  const timestamp = typeof value === "number" ? value : Number(value)
+
+  if (!Number.isFinite(timestamp)) {
+    return "TBD"
+  }
+
+  return formatClockTimeForTimeZone(new Date(timestamp).toISOString(), {
+    timeZone,
+  })
 }
 
 function parseNumericValue(value?: string | null) {

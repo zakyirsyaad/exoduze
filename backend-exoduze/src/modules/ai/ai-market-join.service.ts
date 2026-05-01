@@ -1334,6 +1334,10 @@ export class AiMarketJoinService {
       return this.env.OPENAI_MODEL;
     }
 
+    if (modelProvider === "openrouter") {
+      return this.env.OPENROUTER_MODEL;
+    }
+
     if (modelProvider === "mock") {
       return "exoduze-battle-mock-v1";
     }
