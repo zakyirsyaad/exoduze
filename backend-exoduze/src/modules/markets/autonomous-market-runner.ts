@@ -2,6 +2,7 @@ import type { AppDatabase } from "../../db/database.js";
 import { queryRows } from "../../db/query.js";
 import { HttpError } from "../../lib/http-error.js";
 import type { Env } from "../../config/env.js";
+import { AiMarketJoinService } from "../ai/ai-market-join.service.js";
 import { MarketGeneratorService } from "./market-generator.js";
 import { MarketsService } from "./markets.service.js";
 import { OracleResolverService } from "./oracle-resolver.js";
@@ -29,6 +30,7 @@ export class AutonomousMarketRunner {
     private readonly topicSnapshotsService: TopicSnapshotsService,
     private readonly marketGeneratorService: MarketGeneratorService,
     private readonly marketsService: MarketsService,
+    private readonly aiMarketJoinService: AiMarketJoinService,
     private readonly oracleResolverService: OracleResolverService,
     private readonly resolutionFinalizerService: ResolutionFinalizerService,
     private readonly logger?: AutonomousRunnerLogger,
@@ -93,6 +95,7 @@ export class AutonomousMarketRunner {
     let marketsCreated = 0;
     let marketsSkipped = 0;
     let marketsPublished = 0;
+    let decisionsRefreshed = 0;
 
     if (this.env.MARKET_GENERATION_ENABLED) {
       for (const category of categories) {
@@ -170,6 +173,16 @@ export class AutonomousMarketRunner {
       }
     }
 
+    const refreshed =
+      await this.aiMarketJoinService.refreshLiveMarketDecisions(now);
+    decisionsRefreshed = refreshed.decisionsRefreshed;
+    if (refreshed.errors.length > 0) {
+      this.logger?.warn?.(
+        { errors: refreshed.errors, skipped: refreshed.skipped },
+        "Autonomous market runner skipped one or more AI decision refreshes.",
+      );
+    }
+
     const resolved = await this.oracleResolverService.resolveMarkets(now);
     const finalized =
       await this.resolutionFinalizerService.finalizeResolutions(now);
@@ -181,6 +194,7 @@ export class AutonomousMarketRunner {
         markets_created: marketsCreated,
         markets_skipped: marketsSkipped,
         markets_published: marketsPublished,
+        decisions_refreshed: decisionsRefreshed,
         resolutions_proposed: resolved.resolutionsProposed,
         resolutions_finalized: finalized.resolutionsFinalized,
       },

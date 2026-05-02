@@ -83,7 +83,7 @@ export async function buildApp() {
 
   await app.register(websocket);
 
-  const db = createDatabase(env);
+  const db = createDatabase(env, app.log);
   await db.query("SELECT 1");
   const authService = new AuthService(db, env);
   const agentsService = new AgentsService(db);
@@ -114,6 +114,7 @@ export async function buildApp() {
     topicSnapshotsService,
     marketGeneratorService,
     marketsService,
+    aiMarketJoinService,
     oracleResolverService,
     resolutionFinalizerService,
     app.log,
@@ -140,6 +141,7 @@ export async function buildApp() {
     db,
     topicSnapshotsService,
     marketGeneratorService,
+    aiMarketJoinService,
     oracleResolverService,
     resolutionFinalizerService,
   );

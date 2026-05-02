@@ -5,6 +5,7 @@ import type { Env } from "../config/env.js";
 import type { AppDatabase } from "../db/database.js";
 import { HttpError } from "../lib/http-error.js";
 import { writeAuditLog } from "../modules/audit/audit-log.js";
+import { AiMarketJoinService } from "../modules/ai/ai-market-join.service.js";
 import { MarketGeneratorService } from "../modules/markets/market-generator.js";
 import { OracleResolverService } from "../modules/markets/oracle-resolver.js";
 import { ResolutionFinalizerService } from "../modules/markets/resolution-finalizer.js";
@@ -13,6 +14,7 @@ import { TopicSnapshotsService } from "../modules/topics/topic-snapshots.js";
 const cronJobIdSchema = z.enum([
   "generate-topic-snapshot",
   "generate-markets",
+  "refresh-ai-decisions",
   "resolve-markets",
   "finalize-resolutions",
 ]);
@@ -36,6 +38,7 @@ export async function registerCronRoutes(
   db: AppDatabase,
   topicSnapshotsService: TopicSnapshotsService,
   marketGeneratorService: MarketGeneratorService,
+  aiMarketJoinService: AiMarketJoinService,
   oracleResolverService: OracleResolverService,
   resolutionFinalizerService: ResolutionFinalizerService,
 ) {
@@ -125,6 +128,15 @@ export async function registerCronRoutes(
       });
     }
 
+    if (params.jobId === "refresh-ai-decisions") {
+      const result = await aiMarketJoinService.refreshLiveMarketDecisions();
+      return buildCronResult({
+        decisionsRefreshed: result.decisionsRefreshed,
+        skipped: result.skipped,
+        errors: result.errors,
+      });
+    }
+
     const result = await resolutionFinalizerService.finalizeResolutions();
     return buildCronResult({
       resolutionsFinalized: result.resolutionsFinalized,
@@ -178,6 +190,7 @@ function buildCronResult(input: {
   snapshotsCreated?: number;
   marketsCreated?: number;
   marketsChecked?: number;
+  decisionsRefreshed?: number;
   resolutionsProposed?: number;
   resolutionsFinalized?: number;
   skipped?: number;
@@ -189,6 +202,7 @@ function buildCronResult(input: {
     snapshotsCreated: input.snapshotsCreated ?? 0,
     marketsCreated: input.marketsCreated ?? 0,
     marketsChecked: input.marketsChecked ?? 0,
+    decisionsRefreshed: input.decisionsRefreshed ?? 0,
     resolutionsProposed: input.resolutionsProposed ?? 0,
     resolutionsFinalized: input.resolutionsFinalized ?? 0,
   };
