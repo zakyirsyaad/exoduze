@@ -158,30 +158,30 @@
 
 ## Implementation Checklist
 
-| Area | Item | Status | Priority | Evidence | Notes |
-|---|---|---|---|---|---|
-| Frontend | Build/typecheck | Done | High | `npm run typecheck`, `npm run build` passed | Lint still needed fixes |
-| Frontend | Admin market/dispute/cron | Missing | BLOCKER | `admin-client.ts` calls unsupported routes | 404 in staging |
-| Backend | Public market APIs | Partial | High | list/detail/join/stake/news exist | Admin lifecycle missing |
-| Backend | Auth/authz | Partial | High | Wallet/admin guards exist | No rate limits and localStorage token risk |
-| Database | Migrations/indexes | Partial | High | SQL migrations present | No RLS/history; migration tracking weak |
-| Web3 | Contract core | Partial | Critical | Rust tests pass | Payout parity and env separation unresolved |
-| AI | Battle decisioning | Missing | BLOCKER | provider always `mock` | Market-copy AI is better implemented |
-| Resolution | Dispute/finalizer | Missing/Unsafe | BLOCKER | routes missing; finalize-before-settle | Highest market integrity risk |
-| Security | Secrets/deps/CORS | Partial | Critical | ignored secrets present, audits fail | Rotate and harden before staging |
-| DevOps | CI/deploy/rollback | Missing | Critical | no CI/deploy config found | Needed before production |
-| Observability | Logs/audits/metrics | Partial | High | Fastify logs only | audit/job tables mostly unused |
-| Docs | Setup/deployment/API | Partial | Medium | backend README useful, frontend template | Update after Phase 1 |
+| Area          | Item                      | Status         | Priority | Evidence                                    | Notes                                       |
+| ------------- | ------------------------- | -------------- | -------- | ------------------------------------------- | ------------------------------------------- |
+| Frontend      | Build/typecheck           | Done           | High     | `npm run typecheck`, `npm run build` passed | Lint still needed fixes                     |
+| Frontend      | Admin market/dispute/cron | Missing        | BLOCKER  | `admin-client.ts` calls unsupported routes  | 404 in staging                              |
+| Backend       | Public market APIs        | Partial        | High     | list/detail/join/stake/news exist           | Admin lifecycle missing                     |
+| Backend       | Auth/authz                | Partial        | High     | Wallet/admin guards exist                   | No rate limits and localStorage token risk  |
+| Database      | Migrations/indexes        | Partial        | High     | SQL migrations present                      | No RLS/history; migration tracking weak     |
+| Web3          | Contract core             | Partial        | Critical | Rust tests pass                             | Payout parity and env separation unresolved |
+| AI            | Battle decisioning        | Missing        | BLOCKER  | provider always `mock`                      | Market-copy AI is better implemented        |
+| Resolution    | Dispute/finalizer         | Missing/Unsafe | BLOCKER  | routes missing; finalize-before-settle      | Highest market integrity risk               |
+| Security      | Secrets/deps/CORS         | Partial        | Critical | ignored secrets present, audits fail        | Rotate and harden before staging            |
+| DevOps        | CI/deploy/rollback        | Missing        | Critical | no CI/deploy config found                   | Needed before production                    |
+| Observability | Logs/audits/metrics       | Partial        | High     | Fastify logs only                           | audit/job tables mostly unused              |
+| Docs          | Setup/deployment/API      | Partial        | Medium   | backend README useful, frontend template    | Update after Phase 1                        |
 
 ## Risk Matrix
 
-| Risk | Likelihood | Impact | Priority |
-|---|---:|---:|---:|
-| Broken admin/dispute routes | High | High | BLOCKER |
-| Payout/claim accounting mismatch | High | Critical | BLOCKER/CRITICAL |
-| Autonomous finalizer divergence | Medium | Critical | BLOCKER |
-| Secrets/dependency exposure | High | High | CRITICAL |
-| Multi-instance runner duplication | Medium | High | CRITICAL |
+| Risk                              | Likelihood |   Impact |         Priority |
+| --------------------------------- | ---------: | -------: | ---------------: |
+| Broken admin/dispute routes       |       High |     High |          BLOCKER |
+| Payout/claim accounting mismatch  |       High | Critical | BLOCKER/CRITICAL |
+| Autonomous finalizer divergence   |     Medium | Critical |          BLOCKER |
+| Secrets/dependency exposure       |       High |     High |         CRITICAL |
+| Multi-instance runner duplication |     Medium |     High |         CRITICAL |
 
 ## File-by-file Findings
 
