@@ -39,7 +39,7 @@
 - Evidence: `backend-exoduze/src/modules/ai/battle-prediction.service.ts` always calls `generateMockPrediction()` and returns provider `mock`, even when env says `AI_DECISION_PROVIDER=openai`.
 - Why it matters: AI battle decisions are deterministic placeholders, not real provider-backed decisions.
 - Recommended fix: wire battle joins to a real provider path with strict schema validation, or explicitly gate staging as mock-only.
-- Exact files likely involved: `backend-exoduze/src/modules/ai/battle-prediction.service.ts`, `backend-exoduze/src/modules/ai/ai-market-join.service.ts`, `ai-exoduze/index.js`.
+- Exact files likely involved: `backend-exoduze/src/modules/ai/battle-prediction.service.ts`, `backend-exoduze/src/modules/ai/ai-market-join.service.ts`, `backend-exoduze/ai-exoduze/index.js`.
 - Risk if ignored: markets are driven by placeholder logic and users may trust fake model decisions.
 
 #### Finalizer can corrupt resolution state

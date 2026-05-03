@@ -7,6 +7,7 @@ import { HttpError } from "../lib/http-error.js";
 import { writeAuditLog } from "../modules/audit/audit-log.js";
 import { AiMarketJoinService } from "../modules/ai/ai-market-join.service.js";
 import { MarketGeneratorService } from "../modules/markets/market-generator.js";
+import type { MarketsService } from "../modules/markets/markets.service.js";
 import { OracleResolverService } from "../modules/markets/oracle-resolver.js";
 import { ResolutionFinalizerService } from "../modules/markets/resolution-finalizer.js";
 import { TopicSnapshotsService } from "../modules/topics/topic-snapshots.js";
@@ -17,6 +18,7 @@ const cronJobIdSchema = z.enum([
   "refresh-ai-decisions",
   "resolve-markets",
   "finalize-resolutions",
+  "rebuild-leaderboard",
 ]);
 
 const generateTopicSnapshotBodySchema = z.object({
@@ -38,6 +40,7 @@ export async function registerCronRoutes(
   db: AppDatabase,
   topicSnapshotsService: TopicSnapshotsService,
   marketGeneratorService: MarketGeneratorService,
+  marketsService: MarketsService,
   aiMarketJoinService: AiMarketJoinService,
   oracleResolverService: OracleResolverService,
   resolutionFinalizerService: ResolutionFinalizerService,
@@ -137,6 +140,16 @@ export async function registerCronRoutes(
       });
     }
 
+    if (params.jobId === "rebuild-leaderboard") {
+      const result = await marketsService.rebuildLeaderboard();
+      return buildCronResult({
+        leaderboardMarketsProcessed: result.data.markets_processed,
+        leaderboardFactsMaterialized: result.data.facts_materialized,
+        leaderboardSnapshotsWritten: result.data.snapshots_written,
+        leaderboard: result.data,
+      });
+    }
+
     const result = await resolutionFinalizerService.finalizeResolutions();
     return buildCronResult({
       resolutionsFinalized: result.resolutionsFinalized,
@@ -193,10 +206,14 @@ function buildCronResult(input: {
   decisionsRefreshed?: number;
   resolutionsProposed?: number;
   resolutionsFinalized?: number;
+  leaderboardMarketsProcessed?: number;
+  leaderboardFactsMaterialized?: number;
+  leaderboardSnapshotsWritten?: number;
   skipped?: number;
   errors?: Array<Record<string, unknown>>;
   snapshot?: unknown;
   markets?: unknown;
+  leaderboard?: unknown;
 }) {
   const counts = {
     snapshotsCreated: input.snapshotsCreated ?? 0,
@@ -205,6 +222,9 @@ function buildCronResult(input: {
     decisionsRefreshed: input.decisionsRefreshed ?? 0,
     resolutionsProposed: input.resolutionsProposed ?? 0,
     resolutionsFinalized: input.resolutionsFinalized ?? 0,
+    leaderboardMarketsProcessed: input.leaderboardMarketsProcessed ?? 0,
+    leaderboardFactsMaterialized: input.leaderboardFactsMaterialized ?? 0,
+    leaderboardSnapshotsWritten: input.leaderboardSnapshotsWritten ?? 0,
   };
 
   return {
@@ -215,5 +235,6 @@ function buildCronResult(input: {
     errors: input.errors ?? [],
     ...(input.snapshot !== undefined ? { snapshot: input.snapshot } : {}),
     ...(input.markets !== undefined ? { markets: input.markets } : {}),
+    ...(input.leaderboard !== undefined ? { leaderboard: input.leaderboard } : {}),
   };
 }

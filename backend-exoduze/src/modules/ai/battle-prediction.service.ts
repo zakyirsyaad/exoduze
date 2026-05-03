@@ -8,7 +8,7 @@ import {
   hashCanonicalJson,
   type AiDecisionInput,
   type AiDecisionRuntimeConfig,
-} from "../../../../ai-exoduze/index.js";
+} from "../../../ai-exoduze/index.js";
 import type {
   AgentSpecialization,
   BattleSignalWeights,

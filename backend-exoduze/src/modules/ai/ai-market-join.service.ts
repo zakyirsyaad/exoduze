@@ -30,7 +30,7 @@ import type {
   OnchainPositionAccount,
   OnchainSignatureStatus,
 } from "../onchain/exoduze-onchain.service.js";
-import { hashCanonicalJson } from "../../../../ai-exoduze/index.js";
+import { hashCanonicalJson } from "../../../ai-exoduze/index.js";
 
 type JoinAgentInput = {
   userPrompt?: string | null | undefined;

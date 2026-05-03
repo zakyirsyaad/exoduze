@@ -1,6 +1,6 @@
 # AI Exoduze
 
-Standalone AI decision module used by the backend market-join flow.
+Internal AI decision module used by the backend market-join flow.
 
 This package owns:
 

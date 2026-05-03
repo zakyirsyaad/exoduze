@@ -141,6 +141,7 @@ export async function buildApp() {
     db,
     topicSnapshotsService,
     marketGeneratorService,
+    marketsService,
     aiMarketJoinService,
     oracleResolverService,
     resolutionFinalizerService,

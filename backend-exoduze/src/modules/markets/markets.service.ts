@@ -271,6 +271,38 @@ type SettlementPlanPosition = SettlementPlanPositionInput & {
   gross_units: bigint;
 };
 
+type LeaderboardResolvedMarketRow = {
+  id: string;
+  category_id: string;
+  outcome: MarketOutcome;
+  resolved_at: string;
+};
+
+type LeaderboardFactSourceRow = {
+  market_agent_id: string;
+  agent_id: string;
+  final_decision_side: string;
+  follower_staked_usdc: string;
+  follower_pnl_usdc: string;
+};
+
+type LeaderboardAggregateRow = {
+  agent_id: string;
+  agent_name: string;
+  resolved_markets: number | string;
+  wins: number | string;
+  losses: number | string;
+  total_staked_usdc: string;
+  follower_pnl_usdc: string;
+  first_resolved_at: string;
+  last_resolved_at: string;
+};
+
+type LeaderboardStreakFactRow = {
+  agent_id: string;
+  was_correct: boolean;
+};
+
 export class MarketsService {
   constructor(
     private readonly db: AppDatabase,
@@ -2487,6 +2519,375 @@ export class MarketsService {
     return { data };
   }
 
+  async rebuildLeaderboard() {
+    const client = await this.db.connect();
+
+    try {
+      await client.query("BEGIN");
+
+      const markets = await queryRows<LeaderboardResolvedMarketRow>(
+        client,
+        `
+          SELECT
+            m.id,
+            m.category_id,
+            COALESCE(m.final_outcome, latest_oracle.outcome) AS outcome,
+            COALESCE(m.resolves_at, latest_oracle.resolved_at, m.updated_at)::text AS resolved_at
+          FROM markets m
+          LEFT JOIN LATERAL (
+            SELECT outcome, resolved_at
+            FROM oracle_results
+            WHERE market_id = m.id
+              AND status = 'confirmed'
+            ORDER BY resolved_at DESC NULLS LAST, created_at DESC
+            LIMIT 1
+          ) latest_oracle ON true
+          WHERE m.status = 'resolved'
+            AND COALESCE(m.final_outcome, latest_oracle.outcome) IN ('YES', 'NO')
+          ORDER BY COALESCE(m.resolves_at, latest_oracle.resolved_at, m.updated_at) ASC
+        `,
+      );
+
+      let factsMaterialized = 0;
+      for (const market of markets) {
+        factsMaterialized += await this.materializeLeaderboardFactsForMarket(
+          client,
+          market,
+        );
+      }
+
+      const snapshotsWritten =
+        await this.rebuildAllTimeLeaderboardSnapshots(client);
+
+      await client.query("COMMIT");
+
+      return {
+        data: {
+          markets_processed: markets.length,
+          facts_materialized: factsMaterialized,
+          snapshots_written: snapshotsWritten,
+        },
+      };
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  private async materializeLeaderboardFactsForMarket(
+    client: PoolClient,
+    market: LeaderboardResolvedMarketRow,
+  ) {
+    const rows = await queryRows<LeaderboardFactSourceRow>(
+      client,
+      `
+        SELECT
+          ma.id AS market_agent_id,
+          ma.agent_id,
+          COALESCE(
+            ma.final_decision_side,
+            latest_decision.decision_side,
+            'NO_DECISION'
+          ) AS final_decision_side,
+          stake.follower_staked_usdc,
+          (
+            payout.follower_net_usdc::numeric - stake.follower_staked_usdc::numeric
+          )::text AS follower_pnl_usdc
+        FROM market_agents ma
+        LEFT JOIN LATERAL (
+          SELECT decision_side
+          FROM agent_market_decisions d
+          WHERE d.market_agent_id = ma.id
+          ORDER BY d.sequence_no DESC, d.decided_at DESC
+          LIMIT 1
+        ) latest_decision ON ma.final_decision_side IS NULL
+        LEFT JOIN LATERAL (
+          SELECT COALESCE(SUM(up.stake_usdc), 0)::text AS follower_staked_usdc
+          FROM user_positions up
+          WHERE up.market_id = ma.market_id
+            AND up.market_agent_id = ma.id
+            AND up.status IN ('open', 'settled')
+        ) stake ON true
+        LEFT JOIN LATERAL (
+          SELECT COALESCE(SUM(p.net_usdc), 0)::text AS follower_net_usdc
+          FROM payouts p
+          WHERE p.market_id = ma.market_id
+            AND p.market_agent_id = ma.id
+            AND p.status IN ('claimable', 'paid')
+        ) payout ON true
+        LEFT JOIN LATERAL (
+          SELECT 1 AS exists
+          FROM battle_entries be
+          WHERE be.market_agent_id = ma.id
+          LIMIT 1
+        ) battle_entry ON true
+        WHERE ma.market_id = $1
+          AND ma.status <> 'cancelled'
+          AND (
+            COALESCE(ma.final_decision_side, latest_decision.decision_side) IS NOT NULL
+            OR stake.follower_staked_usdc::numeric > 0
+            OR battle_entry.exists IS NOT NULL
+          )
+        ORDER BY ma.joined_at ASC, ma.created_at ASC
+      `,
+      [market.id],
+    );
+
+    if (rows.length === 0) {
+      await client.query("DELETE FROM leaderboard_facts WHERE market_id = $1", [
+        market.id,
+      ]);
+      return 0;
+    }
+
+    await client.query(
+      `
+        DELETE FROM leaderboard_facts
+        WHERE market_id = $1
+          AND agent_id <> ALL($2::text[])
+      `,
+      [market.id, rows.map((row) => row.agent_id)],
+    );
+
+    for (const row of rows) {
+      const wasCorrect = row.final_decision_side === market.outcome;
+      const factId = createStableId(
+        "lf",
+        `${market.id}:${row.agent_id}`,
+      );
+
+      await client.query(
+        `
+          INSERT INTO leaderboard_facts (
+            id,
+            agent_id,
+            market_id,
+            category_id,
+            resolved_at,
+            final_decision_side,
+            oracle_outcome,
+            was_correct,
+            follower_staked_usdc,
+            follower_pnl_usdc,
+            points,
+            created_at
+          ) VALUES (
+            $1, $2, $3, $4, $5, $6, $7, $8,
+            $9::numeric, $10::numeric, $11, now()
+          )
+          ON CONFLICT (id) DO UPDATE
+          SET
+            category_id = excluded.category_id,
+            resolved_at = excluded.resolved_at,
+            final_decision_side = excluded.final_decision_side,
+            oracle_outcome = excluded.oracle_outcome,
+            was_correct = excluded.was_correct,
+            follower_staked_usdc = excluded.follower_staked_usdc,
+            follower_pnl_usdc = excluded.follower_pnl_usdc,
+            points = excluded.points
+        `,
+        [
+          factId,
+          row.agent_id,
+          market.id,
+          market.category_id,
+          market.resolved_at,
+          row.final_decision_side,
+          market.outcome,
+          wasCorrect,
+          row.follower_staked_usdc,
+          row.follower_pnl_usdc,
+          wasCorrect ? 1 : 0,
+        ],
+      );
+    }
+
+    return rows.length;
+  }
+
+  private async rebuildAllTimeLeaderboardSnapshots(client: PoolClient) {
+    const aggregateRows = await queryRows<LeaderboardAggregateRow>(
+      client,
+      `
+        SELECT
+          lf.agent_id,
+          a.name AS agent_name,
+          COUNT(*)::integer AS resolved_markets,
+          COUNT(*) FILTER (WHERE lf.was_correct)::integer AS wins,
+          COUNT(*) FILTER (WHERE NOT lf.was_correct)::integer AS losses,
+          COALESCE(SUM(lf.follower_staked_usdc), 0)::text AS total_staked_usdc,
+          COALESCE(SUM(lf.follower_pnl_usdc), 0)::text AS follower_pnl_usdc,
+          MIN(lf.resolved_at)::text AS first_resolved_at,
+          MAX(lf.resolved_at)::text AS last_resolved_at
+        FROM leaderboard_facts lf
+        JOIN agents a ON a.id = lf.agent_id
+        GROUP BY lf.agent_id, a.name
+        ORDER BY lf.agent_id ASC
+      `,
+    );
+
+    await client.query(
+      "DELETE FROM leaderboard_agent_snapshots WHERE window_type = 'all_time'",
+    );
+
+    if (aggregateRows.length === 0) {
+      return 0;
+    }
+
+    const streakFacts = await queryRows<LeaderboardStreakFactRow>(
+      client,
+      `
+        SELECT agent_id, was_correct
+        FROM leaderboard_facts
+        ORDER BY agent_id ASC, resolved_at ASC, market_id ASC
+      `,
+    );
+    const streaks = new Map<
+      string,
+      { current_streak: number; best_streak: number }
+    >();
+    let currentAgentId: string | null = null;
+    let runningWinStreak = 0;
+    let bestWinStreak = 0;
+    let lastWasCorrect = false;
+
+    const flushStreak = () => {
+      if (!currentAgentId) {
+        return;
+      }
+
+      streaks.set(currentAgentId, {
+        current_streak: lastWasCorrect ? runningWinStreak : 0,
+        best_streak: bestWinStreak,
+      });
+    };
+
+    for (const fact of streakFacts) {
+      if (currentAgentId !== fact.agent_id) {
+        flushStreak();
+        currentAgentId = fact.agent_id;
+        runningWinStreak = 0;
+        bestWinStreak = 0;
+        lastWasCorrect = false;
+      }
+
+      lastWasCorrect = Boolean(fact.was_correct);
+      if (lastWasCorrect) {
+        runningWinStreak += 1;
+        bestWinStreak = Math.max(bestWinStreak, runningWinStreak);
+      } else {
+        runningWinStreak = 0;
+      }
+    }
+    flushStreak();
+
+    const windowStart = aggregateRows.reduce(
+      (earliest, row) =>
+        Date.parse(row.first_resolved_at) < Date.parse(earliest)
+          ? row.first_resolved_at
+          : earliest,
+      aggregateRows[0]?.first_resolved_at ?? new Date().toISOString(),
+    );
+    const windowEnd = aggregateRows.reduce(
+      (latest, row) =>
+        Date.parse(row.last_resolved_at) > Date.parse(latest)
+          ? row.last_resolved_at
+          : latest,
+      aggregateRows[0]?.last_resolved_at ?? new Date().toISOString(),
+    );
+
+    const rankedRows = aggregateRows
+      .map((row) => {
+        const resolvedMarkets = Number(row.resolved_markets);
+        const wins = Number(row.wins);
+        const accuracyPct =
+          resolvedMarkets === 0 ? 0 : (wins / resolvedMarkets) * 100;
+        const bayesianAccuracy =
+          ((wins + 1) / (resolvedMarkets + 2)) * 100;
+
+        return {
+          ...row,
+          resolvedMarkets,
+          wins,
+          losses: Number(row.losses),
+          accuracyPct,
+          bayesianAccuracy,
+          followerPnlSort: Number(row.follower_pnl_usdc),
+        };
+      })
+      .sort((left, right) => {
+        if (right.bayesianAccuracy !== left.bayesianAccuracy) {
+          return right.bayesianAccuracy - left.bayesianAccuracy;
+        }
+        if (right.resolvedMarkets !== left.resolvedMarkets) {
+          return right.resolvedMarkets - left.resolvedMarkets;
+        }
+        if (right.followerPnlSort !== left.followerPnlSort) {
+          return right.followerPnlSort - left.followerPnlSort;
+        }
+        return left.agent_name.localeCompare(right.agent_name);
+      });
+
+    for (const [index, row] of rankedRows.entries()) {
+      const streak = streaks.get(row.agent_id) ?? {
+        current_streak: 0,
+        best_streak: 0,
+      };
+      const snapshotId = createStableId(
+        "las",
+        `all_time:${windowEnd}:${row.agent_id}`,
+      );
+
+      await client.query(
+        `
+          INSERT INTO leaderboard_agent_snapshots (
+            id,
+            window_type,
+            window_start,
+            window_end,
+            agent_id,
+            rank,
+            resolved_markets,
+            wins,
+            losses,
+            accuracy_pct,
+            bayesian_accuracy,
+            current_streak,
+            best_streak,
+            total_staked_usdc,
+            follower_pnl_usdc,
+            created_at,
+            updated_at
+          ) VALUES (
+            $1, 'all_time', $2, $3, $4, $5, $6, $7, $8,
+            $9::numeric, $10::numeric, $11, $12,
+            $13::numeric, $14::numeric, now(), now()
+          )
+        `,
+        [
+          snapshotId,
+          windowStart,
+          windowEnd,
+          row.agent_id,
+          index + 1,
+          row.resolvedMarkets,
+          row.wins,
+          row.losses,
+          row.accuracyPct.toFixed(4),
+          row.bayesianAccuracy.toFixed(4),
+          streak.current_streak,
+          streak.best_streak,
+          row.total_staked_usdc,
+          row.follower_pnl_usdc,
+        ],
+      );
+    }
+
+    return rankedRows.length;
+  }
+
   private async settleMarketPayouts(
     client: PoolClient,
     market: ManagedMarketRow,
@@ -2724,6 +3125,15 @@ export class MarketsService {
       `,
       [market.id, resolvedAt, input.submittedByWalletId ?? null, input.outcome],
     );
+    const leaderboardFactsUpdated =
+      await this.materializeLeaderboardFactsForMarket(client, {
+        id: market.id,
+        category_id: market.category_id,
+        outcome: input.outcome,
+        resolved_at: resolvedAt,
+      });
+    const leaderboardSnapshotsWritten =
+      await this.rebuildAllTimeLeaderboardSnapshots(client);
 
     return {
       oracle_result_id: oracleResultId,
@@ -2753,6 +3163,8 @@ export class MarketsService {
       total_gross_usdc: this.formatDecimalUnits(totalGrossUnits),
       total_fee_usdc: this.formatDecimalUnits(totalFeeUnits),
       total_net_usdc: this.formatDecimalUnits(totalNetUnits),
+      leaderboard_facts_updated: leaderboardFactsUpdated,
+      leaderboard_snapshots_written: leaderboardSnapshotsWritten,
     };
   }
 

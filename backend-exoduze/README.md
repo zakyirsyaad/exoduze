@@ -168,7 +168,7 @@ If local startup fails with `getaddrinfo ENOTFOUND db.<project-ref>.supabase.co`
 
 ## AI Decisions
 
-- AI decision foundations live in `src/modules/ai`.
+- AI decision orchestration lives in `src/modules/ai`; the internal prompt/provider helper package lives in `ai-exoduze`.
 - The module builds canonical prompts and computes `prompt_hash`, `config_hash`, `snapshot_hash`, and `reason_hash`.
 - `POST /v1/markets/:marketIdOrSlug/agents/:agentIdOrSlug/join` accepts `{ "user_prompt": "..." }`, generates the agent decision, and stores the market agent, prompt artifact, pending commitment, and decision trail.
 - `AI_DECISION_PROVIDER=mock` is the local battle-prediction fallback and does not call a live model.

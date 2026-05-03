@@ -12,6 +12,7 @@ import {
   TrendingTopic,
   TrendingTopicsResponse,
 } from "@/hooks/Type"
+import Image from "next/image"
 
 const summaryNumberFormatter = new Intl.NumberFormat("en-US", {
   maximumFractionDigits: 2,
@@ -153,33 +154,35 @@ export default function Hero() {
           <div className="grid gap-4">
             {loadingLeaderboard && !podium.length
               ? leaderboardSkeletonItems.map((_, idx) => (
-                  <article
-                    key={`leaderboard-skeleton-${idx}`}
-                    className="grid gap-4 rounded-3xl bg-white/80 p-5 backdrop-blur-sm md:grid-cols-[72px_1fr_auto_auto] dark:border-white/10 dark:bg-white/5"
-                  >
-                    <Skeleton className="h-14 w-14 rounded-2xl" />
-                    <div className="space-y-2">
-                      <Skeleton className="h-5 w-32" />
-                      <Skeleton className="h-4 w-24" />
-                    </div>
-                    <div className="space-y-2">
-                      <Skeleton className="h-3 w-16" />
-                      <Skeleton className="h-5 w-20" />
-                    </div>
-                    <div className="space-y-2">
-                      <Skeleton className="h-3 w-14" />
-                      <Skeleton className="h-5 w-20" />
-                    </div>
-                  </article>
-                ))
+                <article
+                  key={`leaderboard-skeleton-${idx}`}
+                  className="grid gap-4 rounded-3xl bg-white/80 p-5 backdrop-blur-sm md:grid-cols-[72px_1fr_auto_auto] dark:border-white/10 dark:bg-white/5"
+                >
+                  <Skeleton className="h-14 w-14 rounded-2xl" />
+                  <div className="space-y-2">
+                    <Skeleton className="h-5 w-32" />
+                    <Skeleton className="h-4 w-24" />
+                  </div>
+                  <div className="space-y-2">
+                    <Skeleton className="h-3 w-16" />
+                    <Skeleton className="h-5 w-20" />
+                  </div>
+                  <div className="space-y-2">
+                    <Skeleton className="h-3 w-14" />
+                    <Skeleton className="h-5 w-20" />
+                  </div>
+                </article>
+              ))
               : podium.map((agent) => (
-                  <article
-                    key={agent.rank}
-                    className="grid gap-4 rounded-3xl bg-white/80 p-5 backdrop-blur-sm md:grid-cols-[72px_1fr_auto_auto] dark:border-white/10 dark:bg-white/5"
-                  >
-                    <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-black text-lg font-semibold text-white dark:bg-white dark:text-black">
-                      {agent.rank}
-                    </div>
+                <article
+                  key={agent.rank}
+                  className="grid gap-4 rounded-3xl bg-white/80 p-5 backdrop-blur-sm md:grid-cols-[72px_1fr_auto_auto] dark:border-white/10 dark:bg-white/5"
+                >
+                  <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-black text-lg font-semibold text-white dark:bg-white dark:text-black">
+                    {agent.rank}
+                  </div>
+                  <div className="flex gap-5">
+                    <Image src={agent.agent.avatar_uri ?? ""} width={50} height={50} alt="AI Agent Avatar Exoduze" className="rounded" />
                     <div>
                       <h2 className="text-lg font-semibold">
                         {agent.agent.name}
@@ -188,24 +191,25 @@ export default function Hero() {
                         {agent.agent.slug}
                       </p>
                     </div>
-                    <div>
-                      <p className="text-xs tracking-[0.25em] text-neutral-500 uppercase">
-                        Accuracy
-                      </p>
-                      <p className="mt-1 text-lg font-semibold">
-                        {formatAccuracyPct(agent.stats.accuracy_pct)}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-xs tracking-[0.25em] text-neutral-500 uppercase">
-                        Streak
-                      </p>
-                      <p className="mt-1 text-lg font-semibold">
-                        {formatCurrentStreak(agent.stats.best_streak)}
-                      </p>
-                    </div>
-                  </article>
-                ))}
+                  </div>
+                  <div>
+                    <p className="text-xs tracking-[0.25em] text-neutral-500 uppercase">
+                      Accuracy
+                    </p>
+                    <p className="mt-1 text-lg font-semibold">
+                      {formatAccuracyPct(agent.stats.accuracy_pct)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-xs tracking-[0.25em] text-neutral-500 uppercase">
+                      Streak
+                    </p>
+                    <p className="mt-1 text-lg font-semibold">
+                      {formatCurrentStreak(agent.stats.best_streak)}
+                    </p>
+                  </div>
+                </article>
+              ))}
             {leaderboardError && !podium.length ? (
               <p className="text-sm text-red-500">
                 Hall of fame data is temporarily unavailable.
@@ -233,41 +237,41 @@ export default function Hero() {
             <ScrollArea className="h-[360px] pr-3 sm:h-[450px]">
               {loadingNews && !news.length
                 ? newsSkeletonItems.map((_, idx) => (
-                    <article
-                      key={`news-skeleton-${idx}`}
-                      className="mb-5 rounded border border-black/10 bg-white/80 p-3 backdrop-blur-sm dark:border-white/10 dark:bg-white/5"
-                    >
-                      <div className="mb-2 grid grid-cols-3 gap-3">
-                        <Skeleton className="col-span-2 h-4 w-full" />
-                        <Skeleton className="h-4 w-16 justify-self-end" />
-                      </div>
-                      <div className="space-y-2">
-                        <Skeleton className="h-4 w-full" />
-                        <Skeleton className="h-4 w-5/6" />
-                      </div>
-                      <Skeleton className="mt-3 h-3 w-24" />
-                    </article>
-                  ))
+                  <article
+                    key={`news-skeleton-${idx}`}
+                    className="mb-5 rounded border border-black/10 bg-white/80 p-3 backdrop-blur-sm dark:border-white/10 dark:bg-white/5"
+                  >
+                    <div className="mb-2 grid grid-cols-3 gap-3">
+                      <Skeleton className="col-span-2 h-4 w-full" />
+                      <Skeleton className="h-4 w-16 justify-self-end" />
+                    </div>
+                    <div className="space-y-2">
+                      <Skeleton className="h-4 w-full" />
+                      <Skeleton className="h-4 w-5/6" />
+                    </div>
+                    <Skeleton className="mt-3 h-3 w-24" />
+                  </article>
+                ))
                 : news.map((item) => (
-                    <Link href={item.url} key={item.id} target="_blank">
-                      <article className="mb-5 rounded border border-black/10 bg-white/80 p-3 backdrop-blur-sm transition-colors duration-300 hover:bg-orange-50 dark:border-white/10 dark:bg-white/5 dark:hover:bg-orange-500/10">
-                        <div className="mb-2 grid grid-cols-3 gap-3">
-                          <span className="col-span-2 line-clamp-2 text-xs font-medium text-neutral-500 uppercase">
-                            {item.title}
-                          </span>
-                          <span className="justify-self-end text-xs text-neutral-500">
-                            {formatPublishedDate(item.published_at)}
-                          </span>
-                        </div>
-                        <h2 className="line-clamp-2 text-sm leading-4 font-semibold">
-                          {formatSummaryText(item.summary ?? item.title)}
-                        </h2>
-                        <p className="mt-2 text-xs text-neutral-500">
-                          {item.source.name}
-                        </p>
-                      </article>
-                    </Link>
-                  ))}
+                  <Link href={item.url} key={item.id} target="_blank">
+                    <article className="mb-5 rounded border border-black/10 bg-white/80 p-3 backdrop-blur-sm transition-colors duration-300 hover:bg-orange-50 dark:border-white/10 dark:bg-white/5 dark:hover:bg-orange-500/10">
+                      <div className="mb-2 grid grid-cols-3 gap-3">
+                        <span className="col-span-2 line-clamp-2 text-xs font-medium text-neutral-500 uppercase">
+                          {item.title}
+                        </span>
+                        <span className="justify-self-end text-xs text-neutral-500">
+                          {formatPublishedDate(item.published_at)}
+                        </span>
+                      </div>
+                      <h2 className="line-clamp-2 text-sm leading-4 font-semibold">
+                        {formatSummaryText(item.summary ?? item.title)}
+                      </h2>
+                      <p className="mt-2 text-xs text-neutral-500">
+                        {item.source.name}
+                      </p>
+                    </article>
+                  </Link>
+                ))}
               {newsError && !news.length ? (
                 <p className="text-sm text-red-500">
                   Live feed is temporarily unavailable.
@@ -287,37 +291,37 @@ export default function Hero() {
             <ScrollArea className="h-[360px] pr-3 sm:h-[450px]">
               {loadingTopics && !topics.length
                 ? topicSkeletonItems.map((_, idx) => (
-                    <article
-                      key={`topic-skeleton-${idx}`}
-                      className="mb-3 flex items-center justify-between rounded border border-black/10 bg-white/80 px-4 py-3 backdrop-blur-sm dark:border-white/10 dark:bg-white/5"
-                    >
-                      <div className="space-y-2">
-                        <Skeleton className="h-4 w-24" />
-                        <Skeleton className="h-3 w-20" />
-                      </div>
-                      <Skeleton className="h-8 w-14 rounded-full" />
-                    </article>
-                  ))
+                  <article
+                    key={`topic-skeleton-${idx}`}
+                    className="mb-3 flex items-center justify-between rounded border border-black/10 bg-white/80 px-4 py-3 backdrop-blur-sm dark:border-white/10 dark:bg-white/5"
+                  >
+                    <div className="space-y-2">
+                      <Skeleton className="h-4 w-24" />
+                      <Skeleton className="h-3 w-20" />
+                    </div>
+                    <Skeleton className="h-8 w-14 rounded-full" />
+                  </article>
+                ))
                 : topics.map((topic) => (
-                    <article
-                      key={topic.id}
-                      className="mb-3 flex items-center justify-between rounded border border-black/10 bg-white/80 px-4 py-3 backdrop-blur-sm dark:border-white/10 dark:bg-white/5"
+                  <article
+                    key={topic.id}
+                    className="mb-3 flex items-center justify-between rounded border border-black/10 bg-white/80 px-4 py-3 backdrop-blur-sm dark:border-white/10 dark:bg-white/5"
+                  >
+                    <div>
+                      <h2 className="font-medium">{topic.name}</h2>
+                      <p className="text-xs text-neutral-500">
+                        {topic.mentions_count} mentions
+                      </p>
+                    </div>
+                    <span
+                      className={`rounded-full px-3 py-1 text-xs font-semibold ${getTopicToneClasses(
+                        topic
+                      )}`}
                     >
-                      <div>
-                        <h2 className="font-medium">{topic.name}</h2>
-                        <p className="text-xs text-neutral-500">
-                          {topic.mentions_count} mentions
-                        </p>
-                      </div>
-                      <span
-                        className={`rounded-full px-3 py-1 text-xs font-semibold ${getTopicToneClasses(
-                          topic
-                        )}`}
-                      >
-                        {getTopicToneLabel(topic)}
-                      </span>
-                    </article>
-                  ))}
+                      {getTopicToneLabel(topic)}
+                    </span>
+                  </article>
+                ))}
               {topicsError && !topics.length ? (
                 <p className="text-sm text-red-500">
                   Hot topics are temporarily unavailable.
